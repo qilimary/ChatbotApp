@@ -28,12 +28,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies & Download Data
+      - name: Install dependencies
         run: |
-          pip install flet gdown
-          echo "==== 开始从云盘下载文件 ===="
-          # 下载 data.zip 到当前根目录，绝对不运行 unzip 解压！
-          gdown "https://drive.google.com/uc?id=1GudOlOQ5vIn7YKzkBl-J36U9kdXk2Avc" -O data.zip
+          pip install flet
+          echo "==== 跳过云盘下载，让APP在手机内部自行下载 ===="
 
       - name: Preprocess & Build APK
         run: |
