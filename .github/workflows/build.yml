@@ -1,7 +1,9 @@
 name: Build Android App
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ "main" ]  # 核心修改：只要代码有改动并保存，就会自动运行
+  workflow_dispatch:      # 保留这个，以便你想手动点的时候还能点
 
 jobs:
   build:
@@ -29,13 +31,22 @@ jobs:
       - name: Install dependencies & Download Data
         run: |
           pip install flet gdown
-          # 使用你提供的云盘ID下载必要文件
+          echo "==== 开始从云盘下载文件 ===="
           gdown "https://drive.google.com/uc?id=1GudOlOQ5vIn7YKzkBl-J36U9kdXk2Avc" -O data.zip
-          # 解压文件
+          
+          echo "==== 检查下载的文件大小 ===="
+          ls -lh data.zip
+          
+          echo "==== 开始解压文件 ===="
           unzip -o data.zip
           
-      - name: Build APK
-        run: flet build apk
+          echo "==== 查看当前目录的所有文件，确认解压是否成功 ===="
+          ls -la
+
+      - name: Build APK (Verbose Mode)
+        run: |
+          echo "==== 开始打包 APK (已开启详细日志模式) ===="
+          flet build apk -v
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
