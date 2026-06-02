@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -22,25 +22,23 @@ jobs:
           channel: 'stable'
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies & Download Data
         run: |
           pip install flet gdown
-          
-          # 【注意】这里把双引号里的链接换成你包含【李尔.py】等所有代码的真实云盘链接
-          gdown "https://drive.google.com/file/d/你的ID/view?usp=sharing" -O data.zip
-          
-          # 解压文件，覆盖到当前目录，让 main.py 能直接看见 李尔.py
+          # 使用你提供的云盘ID下载必要文件
+          gdown "https://drive.google.com/uc?id=1GudOlOQ5vIn7YKzkBl-J36U9kdXk2Avc" -O data.zip
+          # 解压文件
           unzip -o data.zip
           
       - name: Build APK
         run: flet build apk
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Chatbot-Release-APK
           path: build/apk/**/*.apk
