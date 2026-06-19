@@ -296,13 +296,13 @@ jobs:
                   print(f"✅ Successfully patched deadlocks in {fname}")
           '
           
-      - name: Generate main.py (Performance, Memory & Freeze Fix)
+      - name: Generate main.py (Shield Bug Fixed & Memory Tuned)
         run: |
           python3 -c '
           code = """# -*- coding: utf-8 -*-
           import os, sys, traceback, threading, json, time, re
           
-          # 【核心优化1：彻底掐断日志疯狂读写，根治数百兆的Data数据堆积，让APP保持清爽】
+          # 【杜绝日志数据暴涨：斩断数百兆无用日志】
           os.environ["KIVY_NO_FILELOG"] = "1"
           os.environ["KIVY_NO_CONSOLELOG"] = "1"
 
@@ -359,6 +359,22 @@ jobs:
           def strip_emojis(text):
               if not text: return text
               return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
+
+          # ================== 【核心修复：完美侧边栏遮罩组件】 ==================
+          # 废除原先用 Button 做的遮罩。Kivy 禁用 Button 会绝对截断所有触屏事件！
+          class OverlayLayout(BoxLayout):
+              def __init__(self, app_ref, **kwargs):
+                  super().__init__(**kwargs)
+                  self.app_ref = app_ref
+              
+              def on_touch_down(self, touch):
+                  # 如果有颜色且处于变暗显示状态（代表侧边栏已拉出），则拦截点击并收回侧边栏
+                  if getattr(self, "overlay_color", None) and self.overlay_color.a > 0:
+                      self.app_ref.close_drawer()
+                      return True
+                  # 核心修复点：处于完全透明状态时，必须返回 False，表示“不拦截”，让下方所有输入框和按钮照常响应点击！
+                  return False
+
 
           # ================== 侧边栏历史记录组件 ==================
           class HistoryItem(ButtonBehavior, BoxLayout):
@@ -534,7 +550,6 @@ jobs:
 
                   # ---- 聊天显示区 ----
                   self.scroll = ScrollView(size_hint=(1, 1))
-                  # 【核心修复2：还原最流畅的 BoxLayout，杜绝所有引发主线程死锁的无效高度计算代码】
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
                   self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
                   
@@ -558,9 +573,12 @@ jobs:
                   
                   self.root.add_widget(main_layout)
 
-                  # ---- 侧边栏遮罩层 ----
-                  self.overlay = Button(background_color=(0,0,0,1), opacity=0, disabled=True, size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
-                  self.overlay.bind(on_release=self.close_drawer)
+                  # ---- 侧边栏遮罩层 (已完全修复冻结Bug) ----
+                  self.overlay = OverlayLayout(app_ref=self, size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
+                  with self.overlay.canvas:
+                      self.overlay.overlay_color = Color(0, 0, 0, 0)
+                      self.overlay_rect = Rectangle(pos=self.overlay.pos, size=self.overlay.size)
+                  self.overlay.bind(pos=lambda inst, val: setattr(self.overlay_rect, "pos", val), size=lambda inst, val: setattr(self.overlay_rect, "size", val))
                   self.root.add_widget(self.overlay)
 
                   # ---- 侧边栏主体 (占60%) ----
@@ -638,15 +656,12 @@ jobs:
                           self.sidebar_layout.add_widget(HistoryItem(record, self))
 
               def open_drawer(self, *args):
-                  self.overlay.disabled = False
-                  Animation(opacity=0.4, d=0.25, t="out_quad").start(self.overlay)
+                  Animation(a=0.4, d=0.25, t="out_quad").start(self.overlay.overlay_color)
                   Animation(pos_hint={"x": 0}, d=0.25, t="out_quad").start(self.drawer)
 
               def close_drawer(self, *args):
-                  Animation(opacity=0, d=0.2).start(self.overlay)
-                  anim = Animation(pos_hint={"x": -0.6}, d=0.2, t="in_quad")
-                  anim.bind(on_complete=lambda *a: setattr(self.overlay, "disabled", True))
-                  anim.start(self.drawer)
+                  Animation(a=0, d=0.2).start(self.overlay.overlay_color)
+                  Animation(pos_hint={"x": -0.6}, d=0.2, t="in_quad").start(self.drawer)
 
               def load_session(self, record):
                   self.close_drawer()
@@ -736,7 +751,7 @@ jobs:
                   except Exception as e:
                       self._on_init_error(traceback.format_exc())
                   finally:
-                      gc.collect() # 【核心优化3：垃圾清理】
+                      gc.collect()
 
               @mainthread
               def _on_init_error(self, err):
@@ -778,7 +793,7 @@ jobs:
                   except Exception as e:
                       self._on_message_error(traceback.format_exc())
                   finally:
-                      gc.collect() # 【核心优化3：每次互动完主动清扫内存碎片，减轻手机RAM压力】
+                      gc.collect()
 
               @mainthread
               def _on_message_success(self, replies):
@@ -806,7 +821,7 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Extreme Performance Tuned)")
+          print("main.py generated (UI unfreeze and performance tuned)")
           '
 
       
@@ -819,7 +834,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.4
+          version = 1.0.5
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
@@ -830,8 +845,7 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           
-          # 【核心优化4：纯血64位架构声明】
-          # 仅编译 arm64-v8a，不仅大幅缩减32位冗余从而减小APP体积，且彻底发挥64位手机极限算力，保证数据加载飞速秒回。
+          # 【纯粹 64 位极速运行，彻底告别冗余库，瘦身提速】
           android.archs = arm64-v8a
           
           presplash.duration = 3
