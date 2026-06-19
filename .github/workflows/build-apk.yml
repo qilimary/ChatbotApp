@@ -171,7 +171,7 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
           
-      - name: Generate main.py (Ultimate Crash-Free Version)
+      - name: Generate main.py (Ultimate Stable & UI Fixed Version)
         run: |
           python3 -c '
           code = r"""# -*- coding: utf-8 -*-
@@ -191,11 +191,11 @@ jobs:
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
           from kivy.uix.floatlayout import FloatLayout
-          from kivy.uix.anchorlayout import AnchorLayout
           from kivy.uix.scrollview import ScrollView
           from kivy.uix.label import Label
           from kivy.uix.textinput import TextInput
           from kivy.uix.button import Button
+          from kivy.uix.widget import Widget
           from kivy.core.window import Window
           from kivy.graphics import Color, RoundedRectangle, Rectangle
           from kivy.metrics import dp
@@ -206,8 +206,8 @@ jobs:
           from kivy.uix.slider import Slider
           from kivy.properties import NumericProperty
 
-          # 修复键盘偶尔失效的Bug：使用 resize 模式，自动压缩布局并推高内容，永不锁死
-          Window.softinput_mode = "resize"
+          # 回滚至原生 pan 模式，杜绝闪退，同时依靠后续的手动 focus 唤醒键盘
+          Window.softinput_mode = "pan"
           
           # 全局极简/现代色彩体系
           COLOR_BG = (0.95, 0.95, 0.97, 1)          
@@ -224,14 +224,14 @@ jobs:
 
           Window.clearcolor = COLOR_BG
 
-          # 优化字体：优先寻找最通用的安卓系统中文无衬线标准字体，保证美观
+          # 使用标准安全中文字体，去除 .otf 以防引擎 Segfault 闪退
           CJK_FONT = "Roboto"
           for _fp in [
-              "/system/fonts/Miui-Regular.ttf",       # 小米
-              "/system/fonts/OPPOSans-R.ttf",         # OPPO / Vivo
-              "/system/fonts/NotoSansSC-Regular.otf", # 标准现代安卓
-              "/system/fonts/NotoSansCJK-Regular.ttc",
-              "/system/fonts/DroidSansFallback.ttf"   # 经典兜底
+              "/system/fonts/DroidSansFallback.ttf",
+              "/system/fonts/NotoSansSC-Regular.ttf",
+              "/system/fonts/Miui-Regular.ttf",
+              "/system/fonts/OPPOSans-R.ttf",
+              "/system/fonts/NotoSansCJK-Regular.ttc"
           ]:
               if os.path.exists(_fp):
                   CJK_FONT = _fp
@@ -297,7 +297,8 @@ jobs:
                   self.background_normal = ""
                   self.background_active = ""
                   self.cursor_color = COLOR_ACCENT
-                  # 修复打字空白看不见的BUG，强制设置打字的字体颜色
+                  
+                  # 彻底解决输入文字看不到的严重Bug：将输入文本颜色强制指定为深黑色
                   self.foreground_color = (0.1, 0.1, 0.1, 1)
                   self.hint_text_color = (0.6, 0.6, 0.6, 1)
                   
@@ -310,7 +311,7 @@ jobs:
                   self._bg.pos = self.pos
                   self._bg.size = self.size
                   
-              # 增加强制唤醒键盘
+              # 修复偶然调不出键盘Bug：点击时强制获得焦点
               def on_touch_down(self, touch):
                   if self.collide_point(*touch.pos):
                       self.focus = True
@@ -405,7 +406,7 @@ jobs:
                   
                   max_w = Window.width * 0.72
                   
-                  # 修复由于换行引发的截断排版BUG：包含换行符强制进行换行排版
+                  # 修复由于换行引发的截断排版BUG：如果包含换行符强制换行排版
                   if self.texture_size[0] > max_w or '\n' in self.text:
                       self.text_size = (max_w, None)
                       self.texture_update()
@@ -499,10 +500,10 @@ jobs:
                   title_bar.bind(pos=update_title_bg, size=update_title_bg)
                   
                   left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
-                  # UI图标极简化
-                  menu_btn = TopBarButton(text="☰", font_name=CJK_FONT, font_size=dp(22), size_hint=(None, 1), width=dp(50))
+                  # 纯净极简的“菜单”三条杠图标，专门指定为Roboto避免方框乱码
+                  menu_btn = TopBarButton(text="☰", font_name="Roboto", font_size=dp(24), size_hint=(None, 1), width=dp(50))
                   menu_btn.bind(on_release=self.open_drawer)
-                  font_btn = TopBarButton(text="Aa", font_name=CJK_FONT, font_size=dp(18), size_hint=(None, 1), width=dp(50))
+                  font_btn = TopBarButton(text="Aa", font_name="Roboto", font_size=dp(18), size_hint=(None, 1), width=dp(50))
                   font_btn.bind(on_release=self.show_font_settings)
                   left_box.add_widget(menu_btn)
                   left_box.add_widget(font_btn)
@@ -511,7 +512,8 @@ jobs:
                   
                   right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
                   right_box.add_widget(Label(size_hint=(1, 1)))
-                  new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(26), size_hint=(None, 1), width=dp(50))
+                  # “新建”使用极简的加号
+                  new_btn = TopBarButton(text="+", font_name="Roboto", font_size=dp(28), size_hint=(None, 1), width=dp(50))
                   new_btn.bind(on_release=lambda x: self.start_new_session())
                   right_box.add_widget(new_btn)
                   
@@ -521,22 +523,25 @@ jobs:
                   main_layout.add_widget(title_bar)
 
                   # ---- 聊天显示区 ----
-                  # 修复滚动条BUG，加入拖拽滑块
-                  self.scroll = ScrollView(size_hint=(1, 1), scroll_type=['bars', 'content'], bar_width=dp(6), bar_color=(0.6, 0.6, 0.6, 0.8), bar_inactive_color=(0.6, 0.6, 0.6, 0.3))
+                  # 开启内容与进度条双拖拽，你可以直接按住右侧进度条迅速滑动！
+                  self.scroll = ScrollView(size_hint=(1, 1), scroll_type=['bars', 'content'], bar_width=dp(6), bar_color=(0.6, 0.6, 0.6, 0.8), bar_inactive_color=(0.6, 0.6, 0.6, 0.2))
                   
-                  # 修复对齐BUG：使用AnchorLayout充当封套，保证消息从最顶上开始显示，不再沉底！
-                  self.scroll_wrapper = AnchorLayout(anchor_y='top', size_hint_y=None)
+                  # 纯净零副作用的顶格排列修复方案：利用FloatLayout的pos_hint
+                  self.scroll_content = FloatLayout(size_hint_y=None)
                   
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
+                  # 绝对保证内容永远吸附在最上方
+                  self.chat_layout.pos_hint = {"top": 1}
                   self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
                   
-                  def update_wrapper_height(*args):
-                      self.scroll_wrapper.height = max(self.scroll.height, self.chat_layout.height)
-                  self.scroll.bind(height=update_wrapper_height)
-                  self.chat_layout.bind(height=update_wrapper_height)
+                  def update_scroll_content_height(*args):
+                      self.scroll_content.height = max(self.scroll.height, self.chat_layout.height)
                   
-                  self.scroll_wrapper.add_widget(self.chat_layout)
-                  self.scroll.add_widget(self.scroll_wrapper)
+                  self.scroll.bind(height=update_scroll_content_height)
+                  self.chat_layout.bind(height=update_scroll_content_height)
+                  
+                  self.scroll_content.add_widget(self.chat_layout)
+                  self.scroll.add_widget(self.scroll_content)
                   main_layout.add_widget(self.scroll)
 
                   # ---- 输入区 ----
@@ -838,7 +843,7 @@ jobs:
                   for reply in replies:
                       clean_reply = strip_emojis(reply)
                       
-                      # 修复由于JSON序列化导致AI原生换行被转义为字符串 "\n" 而挤在一行的BUG
+                      # 强制转换后端传输中被转义的 "\\n" 字符为真实的换行符，实现自动换段落
                       clean_reply = clean_reply.replace("\\n", "\n")
                       
                       if not clean_reply.strip(): continue
@@ -861,7 +866,7 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Extreme Perf Tuned & UI Fixed)")
+          print("main.py generated (Stable Rollback & UI Fixed)")
           '
 
       - name: Generate buildozer.spec
