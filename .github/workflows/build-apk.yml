@@ -24,7 +24,6 @@ jobs:
 
       - name: Free disk space
         run: |
-          echo "==== 释放磁盘空间 ===="
           sudo rm -rf /usr/share/dotnet /opt/ghc
           sudo apt-get clean
           df -h /
@@ -37,18 +36,10 @@ jobs:
 
       - name: Verify Java installation
         run: |
-          echo "==== Java 验证 ===="
           echo "JAVA_HOME=$JAVA_HOME"
           java -version 2>&1
           which java
           readlink -f $(which java)
-          if [ -d "$JAVA_HOME" ]; then
-            echo "JAVA_HOME OK"
-            ls "$JAVA_HOME" | head -5
-          else
-            echo "JAVA_HOME NOT FOUND"
-            find /opt /usr/lib -name "javac" -type f 2>/dev/null | head -5
-          fi
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -73,7 +64,6 @@ jobs:
         run: |
           echo "==== Install Android SDK ===="
           export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}"
-          echo "JAVA_HOME=$JAVA_HOME"
           java -version 2>&1
 
           mkdir -p $ANDROID_HOME/cmdline-tools
@@ -108,20 +98,50 @@ jobs:
           echo "==== Install SDK packages ===="
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" 2>&1 | tail -10
 
+          echo "==== Also install legacy tools (buildozer needs tools/bin/sdkmanager) ===="
+          sdkmanager "tools" 2>&1 | tail -5
+
           echo "==== SDK installed ===="
           ls -la $ANDROID_HOME/
-          ls -la $ANDROID_HOME/build-tools/ 2>&1
-          ls -la $ANDROID_HOME/platforms/ 2>&1
+          echo "---- cmdline-tools/latest/bin ----"
+          ls $ANDROID_HOME/cmdline-tools/latest/bin/ 2>&1
+          echo "---- tools/bin ----"
+          ls $ANDROID_HOME/tools/bin/ 2>&1
 
       - name: Link SDK to buildozer expected path
         run: |
+          echo "==== 让 buildozer 能找到 SDK ===="
           BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
           mkdir -p "$(dirname "$BUILD_DIR")"
           if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then
             rm -rf "$BUILD_DIR"
           fi
           ln -s "$ANDROID_HOME" "$BUILD_DIR"
+          
+          echo "==== 检查 buildozer 期望的 sdkmanager 路径 ===="
+          EXPECTED="$BUILD_DIR/tools/bin/sdkmanager"
+          ACTUAL="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          
+          if [ -f "$EXPECTED" ]; then
+            echo "✅ 旧版 tools/bin/sdkmanager 已存在"
+          else
+            echo "❌ 旧版 tools/bin/sdkmanager 不存在，创建软链接"
+            mkdir -p "$ANDROID_HOME/tools/bin"
+            ln -sf "$ACTUAL" "$ANDROID_HOME/tools/bin/sdkmanager"
+            # 同时链接其他 buildozer 可能找的工具
+            for tool in avdmanager lint; do
+              if [ -f "$ANDROID_HOME/cmdline-tools/latest/bin/$tool" ]; then
+                ln -sf "$ANDROID_HOME/cmdline-tools/latest/bin/$tool" "$ANDROID_HOME/tools/bin/$tool"
+              fi
+            done
+            echo "✅ 软链接已创建"
+            ls -la "$ANDROID_HOME/tools/bin/"
+          fi
+          
+          echo "==== 最终验证 ===="
           ls -la "$BUILD_DIR/"
+          ls -la "$BUILD_DIR/tools/bin/" 2>&1
+          "$BUILD_DIR/tools/bin/sdkmanager" --version 2>&1
 
       - name: Cache NDK and p4a
         uses: actions/cache@v4
@@ -130,7 +150,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v7-${{ runner.os }}
+          key: ndk-p4a-v8-${{ runner.os }}
 
       - name: Download chatbot zip
         run: |
@@ -314,7 +334,7 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated, lines:", code.count(chr(10)))
+          print("main.py generated")
           '
 
       - name: Generate buildozer.spec
@@ -356,6 +376,9 @@ jobs:
           java -version 2>&1
           ls "$ANDROID_HOME/build-tools/" 2>&1
           ls "$ANDROID_HOME/platforms/" 2>&1
+          echo "---- Verify sdkmanager paths ----"
+          ls "$ANDROID_HOME/tools/bin/" 2>&1
+          ls "$ANDROID_HOME/cmdline-tools/latest/bin/" 2>&1
 
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
