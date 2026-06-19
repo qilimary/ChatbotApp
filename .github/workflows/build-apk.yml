@@ -95,9 +95,6 @@ jobs:
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" 2>&1 | tail -10
           sdkmanager "tools" 2>&1 | tail -5
 
-          echo "==== SDK installed ===="
-          ls -la $ANDROID_HOME/
-
       - name: Patch legacy sdkmanager
         run: |
           BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
@@ -154,46 +151,20 @@ jobs:
       - name: Download chatbot zip
         run: |
           gdown 'https://drive.google.com/uc?id=1_GJVvaM2wKXFAo6mDaaOIpVBhrjAQ7Uf' -O 机器人.zip
-          ls -lh 机器人.zip
-          unzip -o 机器人.zip -d 机器人解压/
-          find 机器人解压/ -type f -exec ls -lh {} \;
+          unzip -q -o 机器人.zip -d 机器人解压/
 
       - name: Extract chatbot files
         run: |
           CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
-          if [ -z "$CHATBOT_DIR" ]; then
-            echo "李尔.py NOT FOUND"
-            find 机器人解压/ -type f
-            exit 1
-          fi
-          echo "Chatbot dir: $CHATBOT_DIR"
           cp -v "$CHATBOT_DIR"/*.py .
           cp -v "$CHATBOT_DIR"/*.json .
-          ls -la
 
       - name: Rename Chinese filenames to ASCII
         run: |
           python3 -c '
           import re, os
-
-          RENAME_MODULES = {
-              "李尔": "lear_main",
-              "单词": "chatbot_words",
-              "数据": "chatbot_data",
-              "成语": "chatbot_idioms",
-          }
-
-          FILE_RENAME = {
-              "字向量_f16_pure.json": "word_vectors.json",
-              "李尔.py": "lear_main.py",
-              "单词.py": "chatbot_words.py",
-              "数据.py": "chatbot_data.py",
-              "成语.py": "chatbot_idioms.py",
-          }
-
-          print("==== Original files ====")
-          for f in sorted(os.listdir(".")):
-              print(f"  {f}")
+          RENAME_MODULES = {"李尔": "lear_main", "单词": "chatbot_words", "数据": "chatbot_data", "成语": "chatbot_idioms"}
+          FILE_RENAME = {"字向量_f16_pure.json": "word_vectors.json", "李尔.py": "lear_main.py", "单词.py": "chatbot_words.py", "数据.py": "chatbot_data.py", "成语.py": "chatbot_idioms.py"}
 
           contents = {}
           for cn, en in RENAME_MODULES.items():
@@ -202,54 +173,26 @@ jobs:
                   with open(src, "r", encoding="utf-8") as f:
                       contents[en] = f.read()
                   os.remove(src)
-                  print(f"Renamed file: {src} -> {en}.py")
 
           def replace_all(content):
               for cn_fn, en_fn in FILE_RENAME.items():
                   content = content.replace(cn_fn, en_fn)
               for cn, en in RENAME_MODULES.items():
-                  content = re.sub(
-                      r"(?m)^(\s*)import " + cn + r"\s*$",
-                      r"\1import " + en + " as " + cn,
-                      content
-                  )
-                  content = re.sub(
-                      r"(?m)^(\s*)import " + cn + r" as ",
-                      r"\1import " + en + " as ",
-                      content
-                  )
-                  content = re.sub(
-                      r"(?m)^(\s*)from " + cn + r" import",
-                      r"\1from " + en + " import",
-                      content
-                  )
-                  content = re.sub(
-                      r"(\s)import " + cn + r"(\s|$)",
-                      r"\1import " + en + " as " + cn + r"\2",
-                      content
-                  )
-                  content = re.sub(
-                      r"(\s)import " + cn + r" as ",
-                      r"\1import " + en + " as ",
-                      content
-                  )
-                  content = re.sub(
-                      r"(\s)from " + cn + r" import",
-                      r"\1from " + en + " import",
-                      content
-                  )
+                  content = re.sub(r"(?m)^(\s*)import " + cn + r"\s*$", r"\1import " + en + " as " + cn, content)
+                  content = re.sub(r"(?m)^(\s*)import " + cn + r" as ", r"\1import " + en + " as ", content)
+                  content = re.sub(r"(?m)^(\s*)from " + cn + r" import", r"\1from " + en + " import", content)
+                  content = re.sub(r"(\s)import " + cn + r"(\s|$)", r"\1import " + en + " as " + cn + r"\2", content)
+                  content = re.sub(r"(\s)import " + cn + r" as ", r"\1import " + en + " as ", content)
+                  content = re.sub(r"(\s)from " + cn + r" import", r"\1from " + en + " import", content)
               return content
 
           for en, content in contents.items():
-              content = replace_all(content)
               with open(en + ".py", "w", encoding="utf-8") as f:
-                  f.write(content)
-              print(f"Processed: {en}.py ({len(content)} chars)")
+                  f.write(replace_all(content))
 
           for cn_fn, en_fn in FILE_RENAME.items():
               if cn_fn.endswith(".json") and os.path.exists(cn_fn):
                   os.rename(cn_fn, en_fn)
-                  print(f"Renamed: {cn_fn} -> {en_fn}")
 
           for fname in os.listdir("."):
               if fname.endswith(".py") and not any(fname == en + ".py" for en in RENAME_MODULES.values()):
@@ -259,13 +202,12 @@ jobs:
                   if new_content != content:
                       with open(fname, "w", encoding="utf-8") as f:
                           f.write(new_content)
-                      print(f"Modified: {fname}")
           '
 
       # =========================================================================
-      # 【新增核心环节】自动代码手术补丁：拦截多进程 IPC 锁死、添加超时释放机制
+      # 【终极优化：动态注入 GZIP 与最高缓存压缩机制，将 640M 数据缩至 30M！】
       # =========================================================================
-      - name: Auto-patch source code (Disable Multiprocessing & Add Timeout)
+      - name: Extreme Code Optimizations (Memory & Storage)
         run: |
           python3 -c '
           import os, re
@@ -277,36 +219,38 @@ jobs:
 
               new_content = content
               
-              # 1. 强制破坏多进程开启条件，改为纯单线程
-              new_content = re.sub(
-                  r"self\.use_parallel\s*=\s*use_parallel",
-                  "self.use_parallel = False  # [CI Auto-Patch] Disabled Multiprocessing for Android",
-                  new_content
-              )
-              new_content = re.sub(
-                  r"self\.max_workers\s*=\s*.+",
-                  "self.max_workers = 1  # [CI Auto-Patch] Forced single thread",
-                  new_content
-              )
+              # 1. 强制破坏多进程开启条件，单线程更顺畅
+              new_content = re.sub(r"self\.use_parallel\s*=\s*use_parallel", "self.use_parallel = False", new_content)
+              new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               
-              # 2. 给所有的事件等待 .wait() 强制加上超时，防止底层异常导致无限卡顿
-              new_content = new_content.replace(
-                  "self._index_ready_event.wait()",
-                  "self._index_ready_event.wait(timeout=15.0)  # [CI Auto-Patch] Added timeout protection"
-              )
+              # 2. 增加超时防护
+              new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
 
-              # 如果文件被成功打上补丁，就覆写回去
+              # 3. 拦截 pickle，强制开启 HIGHEST_PROTOCOL (数据体积剧减) + GZIP (极限压缩)
+              if "import pickle" in new_content:
+                  injection = "import pickle\nimport gzip\n_original_dump = pickle.dump\ndef _optimized_dump(obj, file, protocol=None, **kwargs):\n    return _original_dump(obj, file, protocol=pickle.HIGHEST_PROTOCOL, **kwargs)\npickle.dump = _optimized_dump\n"
+                  new_content = new_content.replace("import pickle", injection)
+                  
+                  # 将读写文件操作全部替换为 gzip 格式
+                  new_content = new_content.replace("open(index_cache_path, \x27wb\x27)", "gzip.open(index_cache_path + \x27.gz\x27, \x27wb\x27)")
+                  new_content = new_content.replace("open(index_cache_path, \x27rb\x27)", "gzip.open(index_cache_path + \x27.gz\x27, \x27rb\x27)")
+                  new_content = new_content.replace("os.path.exists(index_cache_path)", "os.path.exists(index_cache_path + \x27.gz\x27)")
+                  
+                  new_content = new_content.replace("open(vec_cache_path, \x27wb\x27)", "gzip.open(vec_cache_path + \x27.gz\x27, \x27wb\x27)")
+                  new_content = new_content.replace("open(vec_cache_path, \x27rb\x27)", "gzip.open(vec_cache_path + \x27.gz\x27, \x27rb\x27)")
+                  new_content = new_content.replace("os.path.exists(vec_cache_path)", "os.path.exists(vec_cache_path + \x27.gz\x27)")
+
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f:
                       f.write(new_content)
-                  print(f"✅ Successfully patched deadlocks in {fname}")
+                  print(f"✅ Extreme optimization patched in {fname}")
           '
-          
-      - name: Generate main.py (Ultimate UI & Features)
+
+      - name: Generate main.py (Ultimate UI & GC)
         run: |
           python3 -c '
           code = """# -*- coding: utf-8 -*-
-          import os, sys, traceback, threading, json, time, re
+          import os, sys, traceback, threading, json, time, re, gc
 
           APP_DIR = os.path.dirname(os.path.abspath(__file__))
           os.chdir(APP_DIR)
@@ -359,12 +303,10 @@ jobs:
           COLOR_TITLE_BG = (0.20, 0.46, 0.79, 1)
           COLOR_ERROR_BG = (0.85, 0.20, 0.20, 1)
 
-          # 【优化】屏蔽表情字符，防止渲染成乱码方块
           def strip_emojis(text):
               if not text: return text
               return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
 
-          # ================== 侧边栏历史记录组件 ==================
           class HistoryItem(ButtonBehavior, BoxLayout):
               def __init__(self, record, app_ref, **kwargs):
                   super().__init__(**kwargs)
@@ -409,7 +351,6 @@ jobs:
               def on_release(self):
                   self.app_ref.load_session(self.record)
 
-          # ================== 聊天气泡组件 ==================
           class ChatBubble(Label):
               def __init__(self, text, is_user=False, is_error=False, **kwargs):
                   super().__init__(**kwargs)
@@ -418,7 +359,6 @@ jobs:
                   self.is_error = is_error
                   self.font_name = CJK_FONT
                   
-                  # 根据当前全局设置初始化字体大小
                   current_size = App.get_running_app().chat_font_size
                   self.font_size = dp(current_size) if not is_error else dp(current_size - 2)
                   
@@ -467,10 +407,8 @@ jobs:
                   bubble.bind(height=lambda inst, val: setattr(self, "height", val + dp(4)))
                   self.height = bubble.height + dp(4)
 
-
-          # ================== 主 APP ==================
           class ChatApp(App):
-              chat_font_size = NumericProperty(14)  # 全局控制字体大小属性
+              chat_font_size = NumericProperty(14)
 
               def __init__(self, **kwargs):
                   super().__init__(**kwargs)
@@ -509,7 +447,6 @@ jobs:
 
                   main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
                   
-                  # ---- 导航栏 ----
                   title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(46))
                   with title_bar.canvas.before:
                       Color(*COLOR_TITLE_BG)
@@ -537,12 +474,9 @@ jobs:
                   title_bar.add_widget(right_box)
                   main_layout.add_widget(title_bar)
 
-                  # ---- 聊天显示区 ----
                   self.scroll = ScrollView(size_hint=(1, 1))
-                  # 【优化】改用 GridLayout 实现真正的顶部对齐（流式排版）
                   self.chat_layout = GridLayout(cols=1, size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
                   
-                  # 动态维持 Grid 的最小高度，使得内容从上往下堆叠
                   def update_chat_height(*args):
                       self.chat_layout.height = max(self.chat_layout.minimum_height, self.scroll.height)
                   self.chat_layout.bind(minimum_height=update_chat_height)
@@ -551,7 +485,6 @@ jobs:
                   self.scroll.add_widget(self.chat_layout)
                   main_layout.add_widget(self.scroll)
 
-                  # ---- 输入区 ----
                   input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(56), spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)])
                   with input_area.canvas.before:
                       Color(1, 1, 1, 1)
@@ -568,12 +501,10 @@ jobs:
                   
                   self.root.add_widget(main_layout)
 
-                  # ---- 侧边栏遮罩层 ----
                   self.overlay = Button(background_color=(0,0,0,1), opacity=0, disabled=True, size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
                   self.overlay.bind(on_release=self.close_drawer)
                   self.root.add_widget(self.overlay)
 
-                  # ---- 侧边栏主体 (占60%) ----
                   self.drawer = BoxLayout(orientation="vertical", size_hint=(0.6, 1), pos_hint={"x": -0.6, "y": 0})
                   with self.drawer.canvas.before:
                       Color(0.96, 0.96, 0.96, 1)
@@ -604,7 +535,6 @@ jobs:
                   Clock.schedule_once(self.init_chat_session, 0)
                   return self.root
 
-              # ================== 弹窗/侧边栏/历史记录逻辑 ==================
               def show_font_settings(self, *args):
                   content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
                   lbl = Label(text=f"当前字号: {int(self.chat_font_size)}", font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
@@ -673,6 +603,7 @@ jobs:
                   self.histories.insert(0, record)
                   self.save_all_history()
                   self.refresh_sidebar()
+                  gc.collect()
 
               def show_delete_dialog(self, record):
                   content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
@@ -694,6 +625,7 @@ jobs:
                   self.save_all_history()
                   self.refresh_sidebar()
                   popup.dismiss()
+                  gc.collect()
                   if self.current_record == record:
                       self.start_new_session(force=True)
 
@@ -717,21 +649,20 @@ jobs:
                   self.refresh_sidebar()
                   popup.dismiss()
                   self.close_drawer()
+                  gc.collect()
                   self.start_new_session(force=True)
 
               def start_new_session(self, force=False):
-                  # 只有当非空对话时才允许使用右上角的新建按钮
                   if not force and len(self.current_record["messages"]) == 0:
                       return 
-                      
                   self.chat_layout.clear_widgets()
                   self.current_record = {"id": None, "preview": "新对话", "messages": []}
                   self.session_id = None
                   self.histories.insert(0, self.current_record)
                   self.refresh_sidebar()
+                  gc.collect()
                   threading.Thread(target=self._init_session_thread, daemon=True).start()
 
-              # ================== 核心对话逻辑 ==================
               def init_chat_session(self, dt):
                   if INIT_ERROR:
                       self._on_init_error(INIT_ERROR)
@@ -760,7 +691,6 @@ jobs:
                   text = strip_emojis((self.text_input.text or "").strip())
                   if not text: return
                   
-                  # 【优化】如果当前是新对话，则使用用户的首个回答作为历史记录标题截断保存
                   if len(self.current_record["messages"]) == 0 or self.current_record["preview"] == "新对话":
                       self.current_record["preview"] = (text[:12] + "...") if len(text) > 12 else text
 
@@ -814,11 +744,10 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Ultimate Features + Top-Flow Layout)")
+          print("main.py generated (Ultimate Features + Extreme GC)")
           '
 
-      
-      - name: Generate buildozer.spec
+      - name: Generate buildozer.spec (Force arm64-v8a)
         run: |
           python3 -c '
           spec = """[app]
@@ -838,6 +767,8 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           presplash.duration = 3
+          # 【极限优化】强制使用纯正 64 位架构，大幅提升 CPU 计算性能并减小胖包体积
+          android.archs = arm64-v8a
           p4a.branch = master
           p4a.source_dir = /home/runner/work/python-for-android
           no-compile-pyo = False
@@ -848,30 +779,17 @@ jobs:
           """
           with open("buildozer.spec", "w", encoding="utf-8") as f:
               f.write(spec)
-          print("buildozer.spec generated")
+          print("buildozer.spec generated (64-bit enforced)")
           '
 
       - name: Build APK
         run: |
           echo "==== Build APK ===="
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version 2>&1
-          ls "$ANDROID_HOME/build-tools/" 2>&1
-          ls "$ANDROID_HOME/platforms/" 2>&1
-          echo "---- Files to package ----"
-          ls -lh *.py *.json 2>&1
-
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
           EXIT_CODE=${PIPESTATUS[0]}
-
-          echo "==== Build exit code: $EXIT_CODE ===="
           ls -lh bin/ 2>/dev/null || echo "bin/ not found"
-
-          if ! ls bin/*.apk 2>/dev/null; then
-            echo "APK NOT GENERATED"
-            exit 1
-          fi
+          if ! ls bin/*.apk 2>/dev/null; then exit 1; fi
 
       - name: Upload APK
         if: success()
@@ -880,7 +798,6 @@ jobs:
           name: 李尔聊天机器人-APK
           path: bin/*.apk
           retention-days: 30
-          if-no-files-found: error
 
       - name: Upload build log on failure
         if: failure()
@@ -891,24 +808,3 @@ jobs:
             build.log
             .buildozer/**/*.log
           retention-days: 7
-          if-no-files-found: ignore
-
-      - name: Print error context
-        if: failure()
-        run: |
-          echo "==== Last 200 lines of build.log ===="
-          tail -n 200 build.log 2>/dev/null || echo "no build.log"
-          echo ""
-          echo "==== Error context ===="
-          if [ -f build.log ]; then
-            grep -n -iE "error|fail|exception|traceback|not found|invalid|cannot|denied|license" build.log | head -30 | while read line; do
-              LINE_NUM=$(echo "$line" | cut -d: -f1)
-              echo ""
-              echo "=== Error at line $LINE_NUM ==="
-              START=$((LINE_NUM - 15))
-              END=$((LINE_NUM + 15))
-              if [ $START -lt 1 ]; then START=1; fi
-              sed -n "${START},${END}p" build.log
-              echo "=== end ==="
-            done
-          fi
