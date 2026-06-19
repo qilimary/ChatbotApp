@@ -151,9 +151,6 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      # =========================================================================================
-      # 【核心改动 1】恢复并发能力：将 ProcessPool 替换为 ThreadPool，恢复秒回算力，杜绝锁死！
-      # =========================================================================================
       - name: Auto-patch Multi-threading Performance
         run: |
           python3 -c '
@@ -163,11 +160,8 @@ jobs:
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               
               new_content = content
-              # 将进程池平滑替换为线程池，完美兼容 Android 且不降低计算速度
               new_content = new_content.replace("ProcessPoolExecutor", "ThreadPoolExecutor")
               new_content = new_content.replace("concurrent.futures.ProcessPoolExecutor", "concurrent.futures.ThreadPoolExecutor")
-              
-              # 防止底层长时间无响应阻塞 UI，加入 15 秒超时保底
               new_content = new_content.replace(
                   "self._index_ready_event.wait()",
                   "self._index_ready_event.wait(timeout=15.0)"
@@ -177,7 +171,7 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
           
-      - name: Generate main.py (Final Polish Version)
+      - name: Generate main.py (Ultimate Crash-Free Version)
         run: |
           python3 -c '
           code = """# -*- coding: utf-8 -*-
@@ -288,7 +282,7 @@ jobs:
                   self.app_ref.load_session(self.record)
 
 
-          # ================== 【核心改动 2】聊天气泡彻底瘦身重构 ==================
+          # ================== 聊天气泡重构（极致包裹） ==================
           class ChatBubble(Label):
               def __init__(self, text, is_user=False, is_error=False, **kwargs):
                   super().__init__(**kwargs)
@@ -300,7 +294,6 @@ jobs:
                   current_size = App.get_running_app().chat_font_size
                   self.font_size = dp(current_size) if not is_error else dp(current_size - 2)
                   
-                  # 彻底脱离 Kivy 原生布局流，手动精准计算宽高，消除渲染卡顿死循环
                   self.size_hint = (None, None)
                   self.halign = "left"
                   self.valign = "middle"
@@ -309,26 +302,21 @@ jobs:
                   bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
                   with self.canvas.before:
                       Color(*bg)
-                      # 紧凑型圆角
                       self._bg = RoundedRectangle(radius=[dp(8)])
                   
                   self.bind(pos=self._update_bg, size=self._update_bg)
-                  # 安排在下一帧精确计算包裹大小
                   Clock.schedule_once(self._calc_tight_size, 0)
                   
               def _calc_tight_size(self, dt):
-                  # 1. 不受限测算原文字大小
                   self.text_size = (None, None)
                   self.texture_update()
                   
                   max_w = Window.width * 0.75
                   
-                  # 2. 若超出屏幕 75%，则限制宽度使其自动换行
                   if self.texture_size[0] > max_w:
                       self.text_size = (max_w, None)
                       self.texture_update()
                   
-                  # 3. 极其精准的紧贴 Padding（左右各留 12dp，上下各留 8dp）
                   self.size = (self.texture_size[0] + dp(24), self.texture_size[1] + dp(16))
                   self.padding = (dp(12), dp(8))
                   
@@ -354,7 +342,6 @@ jobs:
                       self.add_widget(self.bubble)
                       self.add_widget(spacer)
                       
-                  # 仅仅绑定气泡高度到整行高度，拒绝递归嵌套
                   self.bubble.bind(height=self._update_height)
                   
               def _update_height(self, inst, val):
@@ -390,7 +377,6 @@ jobs:
                   self.save_settings()
                   if hasattr(self, "text_input"):
                       self.text_input.font_size = dp(value + 1)
-                  # 字号修改仅在新消息生效，避免重排导致的巨量消耗
 
               def build(self):
                   self.load_all_history()
@@ -451,8 +437,7 @@ jobs:
                   
                   self.root.add_widget(main_layout)
 
-                  # ================== 【核心改动 3】物理隔离遮罩，绝对防止键盘卡死 ==================
-                  # pos_hint 设置 x: 2，代表把遮罩丢到了屏幕以外的几公里外，彻彻底底不影响原本界面！
+                  # ---- 隔离式侧边栏遮罩层 ----
                   self.overlay = Button(background_color=(0,0,0,1), opacity=0, size_hint=(1, 1), pos_hint={"x": 2, "y": 0})
                   self.overlay.bind(on_release=self.close_drawer)
                   self.root.add_widget(self.overlay)
@@ -487,6 +472,8 @@ jobs:
                   Clock.schedule_once(self.init_chat_session, 0)
                   return self.root
 
+
+              # ================== 【核心修复 1】闪退终结：Popup 严格必须使用 title_font ==================
               def show_font_settings(self, *args):
                   content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
                   lbl = Label(text=f"当前字号: {int(self.chat_font_size)}", font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
@@ -505,9 +492,58 @@ jobs:
                   content.add_widget(slider)
                   content.add_widget(btn_box)
                   
-                  popup = Popup(title="调节字体大小", font_name=CJK_FONT, content=content, size_hint=(0.8, 0.35), auto_dismiss=True)
+                  # 修复：title_font 替代了错误的 font_name，根除闪退！
+                  popup = Popup(title="调节字体大小", title_font=CJK_FONT, content=content, size_hint=(0.8, 0.35), auto_dismiss=True)
                   btn_close.bind(on_release=popup.dismiss)
                   popup.open()
+
+              def show_delete_dialog(self, record):
+                  content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
+                  content.add_widget(Label(text="是否删除此记录？", font_name=CJK_FONT, color=(1,1,1,1)))
+                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(10))
+                  btn_yes = Button(text="是", font_name=CJK_FONT, background_color=(0.8,0.2,0.2,1))
+                  btn_no = Button(text="否", font_name=CJK_FONT, background_color=COLOR_TITLE_BG)
+                  btn_box.add_widget(btn_yes)
+                  btn_box.add_widget(btn_no)
+                  content.add_widget(btn_box)
+                  # 修复：title_font 替代了错误的 font_name，根除闪退！
+                  popup = Popup(title="提示", title_font=CJK_FONT, content=content, size_hint=(0.75, 0.25), auto_dismiss=False)
+                  btn_yes.bind(on_release=lambda x: self.delete_history(record, popup))
+                  btn_no.bind(on_release=popup.dismiss)
+                  popup.open()
+
+              def show_clear_all_dialog(self, *args):
+                  content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
+                  content.add_widget(Label(text="确认清空所有聊天记录？", font_name=CJK_FONT, color=(1,1,1,1)))
+                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(10))
+                  btn_yes = Button(text="确认", font_name=CJK_FONT, background_color=(0.8,0.2,0.2,1))
+                  btn_no = Button(text="取消", font_name=CJK_FONT, background_color=COLOR_TITLE_BG)
+                  btn_box.add_widget(btn_yes)
+                  btn_box.add_widget(btn_no)
+                  content.add_widget(btn_box)
+                  # 修复：title_font 替代了错误的 font_name，根除闪退！
+                  popup = Popup(title="警告", title_font=CJK_FONT, content=content, size_hint=(0.75, 0.25), auto_dismiss=False)
+                  btn_yes.bind(on_release=lambda x: self.clear_all_history(popup))
+                  btn_no.bind(on_release=popup.dismiss)
+                  popup.open()
+
+
+              # ================== 【核心修复 2】杜绝只存不聊的垃圾历史记录 ==================
+              def save_all_history(self):
+                  try:
+                      # 严格判断：只有在这个对话框中，“真实用户发过言”的历史记录才会视为有效并保存！
+                      valid_histories = [h for h in self.histories if any(m.get("is_user") for m in h.get("messages", []))]
+                      with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                          json.dump(valid_histories[:15], f, ensure_ascii=False)
+                  except: pass
+
+              def refresh_sidebar(self):
+                  self.sidebar_layout.clear_widgets()
+                  for record in self.histories:
+                      # 严格判断：只有包含了真实用户对话的记录，才会在侧边栏显示出来！
+                      if any(m.get("is_user") for m in record.get("messages", [])):
+                          self.sidebar_layout.add_widget(HistoryItem(record, self))
+
 
               def load_all_history(self):
                   try:
@@ -517,30 +553,13 @@ jobs:
                   except:
                       self.histories = []
 
-              def save_all_history(self):
-                  try:
-                      # 确保只保存非空的、有意义的对话
-                      valid_histories = [h for h in self.histories if len(h.get("messages", [])) > 0]
-                      with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                          json.dump(valid_histories[:15], f, ensure_ascii=False)
-                  except: pass
-
-              def refresh_sidebar(self):
-                  self.sidebar_layout.clear_widgets()
-                  for record in self.histories:
-                      # ================== 【核心改动 4】彻底根治满屏“新对话” ==================
-                      if len(record.get("messages", [])) > 0:
-                          self.sidebar_layout.add_widget(HistoryItem(record, self))
-
               def open_drawer(self, *args):
-                  # 召唤遮罩回屏幕！
                   self.overlay.pos_hint = {"x": 0, "y": 0}
                   Animation(opacity=0.4, d=0.25, t="out_quad").start(self.overlay)
                   Animation(pos_hint={"x": 0}, d=0.25, t="out_quad").start(self.drawer)
 
               def close_drawer(self, *args):
                   anim = Animation(opacity=0, d=0.2)
-                  # 动画结束后把遮罩扔回异次元（物理隔离键盘输入Bug）
                   anim.bind(on_complete=lambda *a: setattr(self.overlay, "pos_hint", {"x": 2, "y": 0}))
                   anim.start(self.overlay)
                   Animation(pos_hint={"x": -0.6}, d=0.2, t="in_quad").start(self.drawer)
@@ -560,20 +579,6 @@ jobs:
                   self.save_all_history()
                   self.refresh_sidebar()
 
-              def show_delete_dialog(self, record):
-                  content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
-                  content.add_widget(Label(text="是否删除此记录？", font_name=CJK_FONT, color=(1,1,1,1)))
-                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(10))
-                  btn_yes = Button(text="是", font_name=CJK_FONT, background_color=(0.8,0.2,0.2,1))
-                  btn_no = Button(text="否", font_name=CJK_FONT, background_color=COLOR_TITLE_BG)
-                  btn_box.add_widget(btn_yes)
-                  btn_box.add_widget(btn_no)
-                  content.add_widget(btn_box)
-                  popup = Popup(title="提示", font_name=CJK_FONT, content=content, size_hint=(0.75, 0.25), auto_dismiss=False)
-                  btn_yes.bind(on_release=lambda x: self.delete_history(record, popup))
-                  btn_no.bind(on_release=popup.dismiss)
-                  popup.open()
-
               def delete_history(self, record, popup):
                   if record in self.histories:
                       self.histories.remove(record)
@@ -583,21 +588,6 @@ jobs:
                   if self.current_record == record:
                       self.start_new_session(force=True)
 
-              def show_clear_all_dialog(self, *args):
-                  content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
-                  content.add_widget(Label(text="确认清空所有聊天记录？", font_name=CJK_FONT, color=(1,1,1,1)))
-                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(10))
-                  btn_yes = Button(text="确认", font_name=CJK_FONT, background_color=(0.8,0.2,0.2,1))
-                  btn_no = Button(text="取消", font_name=CJK_FONT, background_color=COLOR_TITLE_BG)
-                  btn_box.add_widget(btn_yes)
-                  btn_box.add_widget(btn_no)
-                  content.add_widget(btn_box)
-                  popup = Popup(title="警告", font_name=CJK_FONT, content=content, size_hint=(0.75, 0.25), auto_dismiss=False)
-                  btn_yes.bind(on_release=lambda x: self.clear_all_history(popup))
-                  btn_no.bind(on_release=popup.dismiss)
-                  popup.open()
-
-              # ================== 【核心改动 5】根除清空历史时的崩溃闪退 ==================
               def clear_all_history(self, popup):
                   popup.dismiss()
                   self.close_drawer()
@@ -605,14 +595,13 @@ jobs:
                   self.histories = []
                   self.save_all_history()
                   
-                  # 纯净安全地重置界面参数，坚决避免去后台瞎唤起新线程从而导致闪退
                   self.chat_layout.clear_widgets()
                   self.current_record = {"id": None, "preview": "新对话", "messages": []}
                   self.session_id = None
                   self.refresh_sidebar()
 
               def start_new_session(self, force=False):
-                  # 如果目前已经是一个空对话状态，什么也不用干
+                  # 如果本来就是空对话状态，什么都不干
                   if not force and len(self.current_record.get("messages", [])) == 0:
                       self.close_drawer()
                       return 
@@ -622,7 +611,6 @@ jobs:
                   self.session_id = None
                   self.close_drawer()
                   
-                  # 静默等待你打字触发即可
                   threading.Thread(target=self._init_session_thread, daemon=True).start()
 
               def init_chat_session(self, dt):
@@ -632,7 +620,6 @@ jobs:
                   threading.Thread(target=self._init_session_thread, daemon=True).start()
 
               def _init_session_thread(self):
-                  # 已移除频繁且巨卡的 gc.collect()
                   try:
                       result = chatbot.web_start_session()
                       self.session_id = result.get("session_id")
@@ -654,8 +641,8 @@ jobs:
                   text = strip_emojis((self.text_input.text or "").strip())
                   if not text: return
                   
-                  # 新对话录入逻辑：发了消息才正式记入左侧面板！
-                  is_first_message = len(self.current_record["messages"]) == 0
+                  # 判断此时用户是否是本轮对话中的第一句话
+                  is_first_message = not any(m.get("is_user") for m in self.current_record.get("messages", []))
                   if is_first_message:
                       self.current_record["preview"] = (text[:12] + "...") if len(text) > 12 else text
                       if self.current_record not in self.histories:
@@ -664,6 +651,7 @@ jobs:
                   self.chat_layout.add_widget(MessageRow(text, is_user=True))
                   self.current_record["messages"].append({"is_user": True, "text": text})
                   self._scroll_to_bottom()
+                  
                   self.save_all_history()
                   self.refresh_sidebar()
 
@@ -695,13 +683,9 @@ jobs:
                       if not clean_reply.strip(): continue
                       self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False))
                       self.current_record["messages"].append({"is_user": False, "text": clean_reply})
-                      
-                      # 以防是机器人主动发首句欢迎语，我们也加入历史
-                      if self.current_record not in self.histories:
-                          self.histories.insert(0, self.current_record)
-                          self.refresh_sidebar()
                   
                   self._scroll_to_bottom()
+                  # 若有更新，随时保存
                   self.save_all_history()
 
               @mainthread
@@ -729,7 +713,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.6
+          version = 1.0.7
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
@@ -740,7 +724,7 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           
-          # 依然锁定纯正 64 位架构
+          # 依然锁定纯正 64 位架构，提供稳定秒回底层
           android.archs = arm64-v8a
           
           presplash.duration = 3
