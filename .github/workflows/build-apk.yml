@@ -37,8 +37,6 @@ jobs:
         run: |
           echo "JAVA_HOME=$JAVA_HOME"
           java -version 2>&1
-          which java
-          readlink -f $(which java)
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -95,8 +93,6 @@ jobs:
 
           echo "==== Install SDK packages ===="
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" 2>&1 | tail -10
-
-          echo "==== Also install legacy tools ===="
           sdkmanager "tools" 2>&1 | tail -5
 
           echo "==== SDK installed ===="
@@ -104,7 +100,6 @@ jobs:
 
       - name: Patch legacy sdkmanager
         run: |
-          echo "==== Patch sdkmanager to use Java 17 compatible cmdline-tools ===="
           BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
           mkdir -p "$(dirname "$BUILD_DIR")"
           if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then
@@ -119,7 +114,7 @@ jobs:
           if [ -x "$REAL_SDKMANAGER" ]; then
               exec "$REAL_SDKMANAGER" "$@"
           else
-              echo "ERROR: 新版 sdkmanager 不存在于 $REAL_SDKMANAGER" >&2
+              echo "ERROR" >&2
               exit 1
           fi
           WRAPPER
@@ -134,16 +129,12 @@ jobs:
           if [ -x "$REAL_AVDMANAGER" ]; then
               exec "$REAL_AVDMANAGER" "$@"
           else
-              echo "ERROR: 新版 avdmanager 不存在于 $REAL_AVDMANAGER" >&2
               exit 1
           fi
           WRAPPER2
           chmod +x /tmp/avdmanager_wrapper.sh
           cp /tmp/avdmanager_wrapper.sh "$LEGACY_AVDMANAGER" 2>/dev/null || sudo cp /tmp/avdmanager_wrapper.sh "$LEGACY_AVDMANAGER"
           chmod +x "$LEGACY_AVDMANAGER"
-
-          echo "==== 验证 ===="
-          "$LEGACY_SDKMANAGER" --version 2>&1
 
       - name: Cache NDK and p4a
         uses: actions/cache@v4
@@ -152,7 +143,13 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v11-${{ runner.os }}
+          key: ndk-p4a-v12-${{ runner.os }}
+
+      - name: Pre-clone python-for-android master
+        run: |
+          git clone --depth=1 -b master https://github.com/kivy/python-for-android.git /home/runner/work/python-for-android
+          cd /home/runner/work/python-for-android
+          git log --oneline -1
 
       - name: Download chatbot zip
         run: |
@@ -173,33 +170,44 @@ jobs:
           cp -v "$CHATBOT_DIR"/*.py .
           cp -v "$CHATBOT_DIR"/*.json .
           ls -la
+          echo "==== zip 文件大小检查 ===="
+          ls -lh *.json *.py 2>&1
 
-      - name: Generate main.py
+      - name: Generate main.py (诊断版：崩溃不闪退，显示错误)
         run: |
           python3 -c '
           code = """# -*- coding: utf-8 -*-
-          import os, sys, importlib.util
+          import os, sys, importlib.util, traceback
           APP_DIR = os.path.dirname(os.path.abspath(__file__))
           os.chdir(APP_DIR)
           if APP_DIR not in sys.path:
               sys.path.insert(0, APP_DIR)
-          def load_chatbot_module():
-              try:
-                  import 李尔
-                  return 李尔
-              except Exception:
-                  pass
+
+          # 全局错误捕获：任何初始化错误都显示在屏幕上，不闪退
+          INIT_ERROR = None
+          chatbot = None
+
+          try:
+              print("[main.py] Loading chatbot module...", flush=True)
               py_path = os.path.join(APP_DIR, "李尔.py")
               if not os.path.exists(py_path):
                   raise FileNotFoundError(f"未找到 {py_path}")
+
+              # 列出所有 .py 和 .json 文件，便于诊断
+              files = os.listdir(APP_DIR)
+              print("[main.py] APP_DIR contents:", files, flush=True)
+
               spec = importlib.util.spec_from_file_location("lear_chat", py_path)
               module = importlib.util.module_from_spec(spec)
               sys.modules["lear_chat"] = module
               spec.loader.exec_module(module)
-              return module
-          print("[main.py] Loading chatbot...")
-          chatbot = load_chatbot_module()
-          print("[main.py] Loaded")
+              chatbot = module
+              print("[main.py] Module loaded", flush=True)
+
+          except Exception as e:
+              INIT_ERROR = traceback.format_exc()
+              print("[main.py] INIT ERROR:", INIT_ERROR, flush=True)
+
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
           from kivy.uix.scrollview import ScrollView
@@ -210,24 +218,29 @@ jobs:
           from kivy.graphics import Color, RoundedRectangle, Rectangle
           from kivy.metrics import dp
           from kivy.clock import Clock
+
           CJK_FONT = "Roboto"
-          for _fp in ["/system/fonts/DroidSansFallback.ttf","/system/fonts/NotoSansCJK-Regular.ttc","/system/fonts/NotoSerifCJK-Regular.ttc","/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
+          for _fp in ["/system/fonts/DroidSansFallback.ttf","/system/fonts/NotoSansCJK-Regular.ttc","/system/fonts/NotoSerifCJK-Regular.ttc","/system/fonts/NotoColorEmoji.ttf","/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
               if os.path.exists(_fp):
                   CJK_FONT = _fp
                   break
+
           Window.clearcolor = (0.95, 0.95, 0.95, 1)
           COLOR_USER_BG = (0.29, 0.56, 0.89, 1)
           COLOR_BOT_BG = (1, 1, 1, 1)
           COLOR_USER_FG = (1, 1, 1, 1)
           COLOR_BOT_FG = (0.13, 0.13, 0.13, 1)
           COLOR_TITLE_BG = (0.20, 0.46, 0.79, 1)
+          COLOR_ERROR_BG = (0.85, 0.20, 0.20, 1)
+
+
           class ChatBubble(Label):
-              def __init__(self, text, is_user=False, **kwargs):
+              def __init__(self, text, is_user=False, is_error=False, **kwargs):
                   super().__init__(**kwargs)
                   self.text = text
                   self.is_user = is_user
                   self.font_name = CJK_FONT
-                  self.font_size = dp(16)
+                  self.font_size = dp(13) if is_error else dp(16)
                   self.size_hint_y = None
                   self.halign = "left"
                   self.valign = "middle"
@@ -235,8 +248,9 @@ jobs:
                   self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
                   self.bind(texture_size=self._on_texture_size)
                   self.bind(size=self._on_size)
+                  bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
                   with self.canvas.before:
-                      Color(*(COLOR_USER_BG if is_user else COLOR_BOT_BG))
+                      Color(*bg)
                       self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12)])
                   self.bind(pos=self._update_bg, size=self._update_bg)
               def _on_texture_size(self, instance, value):
@@ -246,15 +260,17 @@ jobs:
               def _update_bg(self, *args):
                   self._bg.pos = self.pos
                   self._bg.size = self.size
+
+
           class MessageRow(BoxLayout):
-              def __init__(self, text, is_user=False, **kwargs):
+              def __init__(self, text, is_user=False, is_error=False, **kwargs):
                   super().__init__(**kwargs)
                   self.orientation = "horizontal"
                   self.size_hint_y = None
                   self.spacing = dp(6)
                   self.padding = (dp(8), dp(2))
-                  bubble = ChatBubble(text, is_user=is_user, size_hint_x=0.78)
-                  spacer = BoxLayout(size_hint_x=0.22)
+                  bubble = ChatBubble(text, is_user=is_user, is_error=is_error, size_hint_x=0.92)
+                  spacer = BoxLayout(size_hint_x=0.08)
                   if is_user:
                       self.add_widget(spacer)
                       self.add_widget(bubble)
@@ -263,10 +279,13 @@ jobs:
                       self.add_widget(spacer)
                   bubble.bind(height=lambda inst, val: setattr(self, "height", val + dp(8)))
                   self.height = bubble.height + dp(8)
+
+
           class ChatApp(App):
               def __init__(self, **kwargs):
                   super().__init__(**kwargs)
                   self.session_id = None
+
               def build(self):
                   root = BoxLayout(orientation="vertical")
                   title = Label(text="李尔", font_name=CJK_FONT, font_size=dp(22), bold=True, size_hint=(1, None), height=dp(54), color=(1, 1, 1, 1))
@@ -275,11 +294,13 @@ jobs:
                       title._bg = Rectangle(pos=title.pos, size=title.size)
                   title.bind(pos=lambda inst, val: setattr(title._bg, "pos", val), size=lambda inst, val: setattr(title._bg, "size", val))
                   root.add_widget(title)
+
                   self.scroll = ScrollView(size_hint=(1, 1))
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
                   self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
                   self.scroll.add_widget(self.chat_layout)
                   root.add_widget(self.scroll)
+
                   input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(58), spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)])
                   with input_area.canvas.before:
                       Color(1, 1, 1, 1)
@@ -292,31 +313,55 @@ jobs:
                   send_btn.bind(on_release=self.send_message)
                   input_area.add_widget(send_btn)
                   root.add_widget(input_area)
+
+                  # 显示初始化错误（如果有）
+                  if INIT_ERROR:
+                      self.chat_layout.add_widget(MessageRow("【初始化错误】", is_user=False, is_error=True))
+                      # 把长错误拆成多行显示
+                      err_lines = INIT_ERROR.split("\\n")
+                      for line in err_lines:
+                          if line.strip():
+                              self.chat_layout.add_widget(MessageRow(line, is_user=False, is_error=True))
+                      return root
+
+                  # 正常启动：初始化会话
                   try:
                       result = chatbot.web_start_session()
                       self.session_id = result.get("session_id")
                       for msg in result.get("messages", []):
                           self.add_bot_message(msg)
                   except Exception as e:
-                      import traceback
-                      traceback.print_exc()
-                      self.add_bot_message(f"初始化失败：{e}")
+                      err = traceback.format_exc()
+                      self.chat_layout.add_widget(MessageRow("【会话初始化失败】", is_user=False, is_error=True))
+                      for line in err.split("\\n"):
+                          if line.strip():
+                              self.chat_layout.add_widget(MessageRow(line, is_user=False, is_error=True))
                   return root
+
               def add_bot_message(self, text):
                   text = (text or "").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=False))
                   self._scroll_to_bottom()
+
               def add_user_message(self, text):
                   text = (text or "").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=True))
                   self._scroll_to_bottom()
+
+              def add_error_message(self, text):
+                  self.chat_layout.add_widget(MessageRow(text, is_user=False, is_error=True))
+                  self._scroll_to_bottom()
+
               def _scroll_to_bottom(self):
                   Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.05)
+
               def send_message(self, instance):
+                  if INIT_ERROR:
+                      return
                   text = (self.text_input.text or "").strip()
                   if not text:
                       return
@@ -328,15 +373,18 @@ jobs:
                       for reply in result.get("replies", []):
                           self.add_bot_message(reply)
                   except Exception as e:
-                      import traceback
-                      traceback.print_exc()
-                      self.add_bot_message(f"出错：{e}")
+                      err = traceback.format_exc()
+                      self.add_error_message("【发送消息出错】")
+                      for line in err.split("\\n"):
+                          if line.strip():
+                              self.add_error_message(line)
+
           if __name__ == "__main__":
               ChatApp().run()
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated")
+          print("main.py generated (diagnostic version)")
           '
 
       - name: Generate buildozer.spec
@@ -348,7 +396,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.0
+          version = 1.0.1
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
@@ -371,18 +419,6 @@ jobs:
           print("buildozer.spec generated")
           '
 
-      - name: Pre-clone python-for-android master
-        run: |
-          echo "==== Pre-clone p4a master branch (with AAB support) ===="
-          git clone --depth=1 -b master https://github.com/kivy/python-for-android.git /home/runner/work/python-for-android
-          echo "==== Verify p4a has aab support ===="
-          cd /home/runner/work/python-for-android
-          git log --oneline -1
-          echo "---- Check aab in toolchain.py ----"
-          grep -E "aab|aab_" pythonforandroid/toolchain.py | head -5 || echo "no aab found"
-          echo "---- Check p4a version ----"
-          cat pythonforandroid/__init__.py | head -10
-
       - name: Build APK
         run: |
           echo "==== Build APK ===="
@@ -390,10 +426,8 @@ jobs:
           java -version 2>&1
           ls "$ANDROID_HOME/build-tools/" 2>&1
           ls "$ANDROID_HOME/platforms/" 2>&1
-          echo "---- Test patched sdkmanager ----"
-          "$ANDROID_HOME/tools/bin/sdkmanager" --version 2>&1
-          echo "---- p4a location ----"
-          ls /home/runner/work/python-for-android/ | head -5
+          echo "---- File sizes (check for huge json) ----"
+          ls -lh *.py *.json 2>&1
 
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
@@ -433,7 +467,7 @@ jobs:
           echo "==== Last 200 lines of build.log ===="
           tail -n 200 build.log 2>/dev/null || echo "no build.log"
           echo ""
-          echo "==== Error context (15 lines around each match) ===="
+          echo "==== Error context ===="
           if [ -f build.log ]; then
             grep -n -iE "error|fail|exception|traceback|not found|invalid|cannot|denied|license" build.log | head -30 | while read line; do
               LINE_NUM=$(echo "$line" | cut -d: -f1)
@@ -445,6 +479,4 @@ jobs:
               sed -n "${START},${END}p" build.log
               echo "=== end ==="
             done
-          else
-            echo "build.log missing"
           fi
