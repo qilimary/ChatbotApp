@@ -1,0 +1,356 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h /
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y zip unzip openjdk-17-jdk python3-pip \
+            autoconf automake libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
+            build-essential ccache git libltdl-dev
+
+      - name: Install buildozer and gdown
+        run: |
+          python -m pip install --upgrade pip
+          pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1"
+
+      - name: Cache buildozer
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+            /home/runner/.local/share/python-for-android
+          key: buildozer-p4a-v3-${{ runner.os }}
+
+      - name: Download chatbot zip from Google Drive
+        run: |
+          gdown 'https://drive.google.com/uc?id=1_GJVvaM2wKXFAo6mDaaOIpVBhrjAQ7Uf' -O 机器人.zip
+          ls -lh 机器人.zip
+          unzip -o 机器人.zip -d 机器人解压/
+          echo "==== 解压后内容： ===="
+          find 机器人解压/ -type f
+
+      - name: Extract chatbot files to project root
+        run: |
+          CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
+          if [ -z "$CHATBOT_DIR" ]; then
+            echo "❌ 未找到 李尔.py"
+            find 机器人解压/ -type f
+            exit 1
+          fi
+          echo "✅ 机器人目录：$CHATBOT_DIR"
+          cp -v "$CHATBOT_DIR"/*.py .
+          cp -v "$CHATBOT_DIR"/*.json .
+          ls -la
+
+      - name: Generate main.py (chat UI)
+        run: |
+          cat << 'PYEOF' > main.py
+          # -*- coding: utf-8 -*-
+          import os
+          import sys
+          import importlib.util
+
+          APP_DIR = os.path.dirname(os.path.abspath(__file__))
+          os.chdir(APP_DIR)
+          if APP_DIR not in sys.path:
+              sys.path.insert(0, APP_DIR)
+
+
+          def load_chatbot_module():
+              try:
+                  import 李尔
+                  return 李尔
+              except Exception:
+                  pass
+              py_path = os.path.join(APP_DIR, "李尔.py")
+              if not os.path.exists(py_path):
+                  raise FileNotFoundError(f"未找到 {py_path}")
+              spec = importlib.util.spec_from_file_location("lear_chat", py_path)
+              module = importlib.util.module_from_spec(spec)
+              sys.modules["lear_chat"] = module
+              spec.loader.exec_module(module)
+              return module
+
+
+          print("[main.py] 正在加载聊天机器人模块...")
+          chatbot = load_chatbot_module()
+          print("[main.py] 模块加载完成")
+
+
+          from kivy.app import App
+          from kivy.uix.boxlayout import BoxLayout
+          from kivy.uix.scrollview import ScrollView
+          from kivy.uix.label import Label
+          from kivy.uix.textinput import TextInput
+          from kivy.uix.button import Button
+          from kivy.core.window import Window
+          from kivy.graphics import Color, RoundedRectangle, Rectangle
+          from kivy.metrics import dp
+          from kivy.clock import Clock
+
+          CJK_FONT = "Roboto"
+          for _fp in [
+              "/system/fonts/DroidSansFallback.ttf",
+              "/system/fonts/NotoSansCJK-Regular.ttc",
+              "/system/fonts/NotoSerifCJK-Regular.ttc",
+              "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",
+          ]:
+              if os.path.exists(_fp):
+                  CJK_FONT = _fp
+                  break
+
+          Window.clearcolor = (0.95, 0.95, 0.95, 1)
+
+          COLOR_USER_BG = (0.29, 0.56, 0.89, 1)
+          COLOR_BOT_BG = (1, 1, 1, 1)
+          COLOR_USER_FG = (1, 1, 1, 1)
+          COLOR_BOT_FG = (0.13, 0.13, 0.13, 1)
+          COLOR_TITLE_BG = (0.20, 0.46, 0.79, 1)
+
+
+          class ChatBubble(Label):
+              def __init__(self, text, is_user=False, **kwargs):
+                  super().__init__(**kwargs)
+                  self.text = text
+                  self.is_user = is_user
+                  self.font_name = CJK_FONT
+                  self.font_size = dp(16)
+                  self.size_hint_y = None
+                  self.halign = "left"
+                  self.valign = "middle"
+                  self.padding = (dp(14), dp(10))
+                  self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
+                  self.bind(texture_size=self._on_texture_size)
+                  self.bind(size=self._on_size)
+                  with self.canvas.before:
+                      Color(*(COLOR_USER_BG if is_user else COLOR_BOT_BG))
+                      self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12)])
+                  self.bind(pos=self._update_bg, size=self._update_bg)
+
+              def _on_texture_size(self, instance, value):
+                  self.height = value[1] + dp(20)
+
+              def _on_size(self, instance, value):
+                  self.text_size = (max(value[0] - dp(28), dp(50)), None)
+
+              def _update_bg(self, *args):
+                  self._bg.pos = self.pos
+                  self._bg.size = self.size
+
+
+          class MessageRow(BoxLayout):
+              def __init__(self, text, is_user=False, **kwargs):
+                  super().__init__(**kwargs)
+                  self.orientation = "horizontal"
+                  self.size_hint_y = None
+                  self.spacing = dp(6)
+                  self.padding = (dp(8), dp(2))
+                  bubble = ChatBubble(text, is_user=is_user, size_hint_x=0.78)
+                  spacer = BoxLayout(size_hint_x=0.22)
+                  if is_user:
+                      self.add_widget(spacer)
+                      self.add_widget(bubble)
+                  else:
+                      self.add_widget(bubble)
+                      self.add_widget(spacer)
+                  bubble.bind(height=lambda inst, val: setattr(self, "height", val + dp(8)))
+                  self.height = bubble.height + dp(8)
+
+
+          class ChatApp(App):
+              def __init__(self, **kwargs):
+                  super().__init__(**kwargs)
+                  self.session_id = None
+
+              def build(self):
+                  root = BoxLayout(orientation="vertical")
+                  title = Label(
+                      text="李尔",
+                      font_name=CJK_FONT,
+                      font_size=dp(22),
+                      bold=True,
+                      size_hint=(1, None),
+                      height=dp(54),
+                      color=(1, 1, 1, 1),
+                  )
+                  with title.canvas.before:
+                      Color(*COLOR_TITLE_BG)
+                      title._bg = Rectangle(pos=title.pos, size=title.size)
+                  title.bind(
+                      pos=lambda inst, val: setattr(title._bg, "pos", val),
+                      size=lambda inst, val: setattr(title._bg, "size", val),
+                  )
+                  root.add_widget(title)
+
+                  self.scroll = ScrollView(size_hint=(1, 1))
+                  self.chat_layout = BoxLayout(
+                      orientation="vertical",
+                      size_hint_y=None,
+                      spacing=dp(6),
+                      padding=[dp(10), dp(10), dp(10), dp(10)],
+                  )
+                  self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
+                  self.scroll.add_widget(self.chat_layout)
+                  root.add_widget(self.scroll)
+
+                  input_area = BoxLayout(
+                      orientation="horizontal",
+                      size_hint=(1, None),
+                      height=dp(58),
+                      spacing=dp(8),
+                      padding=[dp(10), dp(6), dp(10), dp(6)],
+                  )
+                  with input_area.canvas.before:
+                      Color(1, 1, 1, 1)
+                      input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
+                  input_area.bind(
+                      pos=lambda inst, val: setattr(input_area._bg, "pos", val),
+                      size=lambda inst, val: setattr(input_area._bg, "size", val),
+                  )
+                  self.text_input = TextInput(
+                      hint_text="输入消息…",
+                      font_name=CJK_FONT,
+                      font_size=dp(16),
+                      multiline=False,
+                      size_hint=(1, 1),
+                      padding=[dp(10), dp(12), dp(10), dp(10)],
+                  )
+                  self.text_input.bind(on_text_validate=self.send_message)
+                  input_area.add_widget(self.text_input)
+                  send_btn = Button(
+                      text="发送",
+                      font_name=CJK_FONT,
+                      font_size=dp(16),
+                      size_hint=(None, 1),
+                      width=dp(82),
+                      color=(1, 1, 1, 1),
+                      background_color=COLOR_TITLE_BG,
+                      background_normal="",
+                  )
+                  send_btn.bind(on_release=self.send_message)
+                  input_area.add_widget(send_btn)
+                  root.add_widget(input_area)
+
+                  try:
+                      result = chatbot.web_start_session()
+                      self.session_id = result.get("session_id")
+                      for msg in result.get("messages", []):
+                          self.add_bot_message(msg)
+                  except Exception as e:
+                      import traceback
+                      traceback.print_exc()
+                      self.add_bot_message(f"【初始化失败】{e}")
+                  return root
+
+              def add_bot_message(self, text):
+                  text = (text or "").strip()
+                  if not text:
+                      return
+                  self.chat_layout.add_widget(MessageRow(text, is_user=False))
+                  self._scroll_to_bottom()
+
+              def add_user_message(self, text):
+                  text = (text or "").strip()
+                  if not text:
+                      return
+                  self.chat_layout.add_widget(MessageRow(text, is_user=True))
+                  self._scroll_to_bottom()
+
+              def _scroll_to_bottom(self):
+                  Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.05)
+
+              def send_message(self, instance):
+                  text = (self.text_input.text or "").strip()
+                  if not text:
+                      return
+                  self.add_user_message(text)
+                  self.text_input.text = ""
+                  try:
+                      result = chatbot.web_process_message(text, self.session_id)
+                      self.session_id = result.get("session_id")
+                      for reply in result.get("replies", []):
+                          self.add_bot_message(reply)
+                  except Exception as e:
+                      import traceback
+                      traceback.print_exc()
+                      self.add_bot_message(f"【出错啦】{e}")
+
+
+          if __name__ == "__main__":
+              ChatApp().run()
+          PYEOF
+          echo "✅ main.py 已生成 ($(wc -l < main.py) 行)"
+
+      - name: Generate buildozer.spec
+        run: |
+          cat << 'SPECEOF' > buildozer.spec
+          [app]
+          title = 李尔聊天机器人
+          package.name = mychatbot
+          package.domain = org.lear
+          source.dir = .
+          source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
+          version = 1.0.0
+          requirements = python3,kivy
+          orientation = portrait
+          fullscreen = 0
+          android.permissions = INTERNET
+          android.minapi = 21
+          android.api = 34
+          android.ndk = 25b
+          android.allow_backup = 1
+          presplash.duration = 3
+
+          [buildozer]
+          log_level = 2
+          warn_on_root = 1
+          SPECEOF
+          echo "✅ buildozer.spec 已生成"
+
+      - name: Build APK
+        run: |
+          buildozer -v android debug
+          ls -lh bin/
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 李尔聊天机器人-APK
+          path: bin/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            .buildozer/**/*.log
+          retention-days: 7
+          if-no-files-found: ignore
