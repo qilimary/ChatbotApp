@@ -260,13 +260,46 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f:
                           f.write(new_content)
                       print(f"Modified: {fname}")
+          '
 
-          print("")
-          print("==== Final files ====")
-          for f in sorted(os.listdir(".")):
-              if f.endswith((".py", ".json")):
-                  size = os.path.getsize(f)
-                  print(f"  {f} ({size} bytes)")
+      # =========================================================================
+      # 【新增核心环节】自动代码手术补丁：拦截多进程 IPC 锁死、添加超时释放机制
+      # =========================================================================
+      - name: Auto-patch source code (Disable Multiprocessing & Add Timeout)
+        run: |
+          python3 -c '
+          import os, re
+
+          for fname in os.listdir("."):
+              if not fname.endswith(".py"): continue
+              with open(fname, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              new_content = content
+              
+              # 1. 强制破坏多进程开启条件，改为纯单线程
+              new_content = re.sub(
+                  r"self\.use_parallel\s*=\s*use_parallel",
+                  "self.use_parallel = False  # [CI Auto-Patch] Disabled Multiprocessing for Android",
+                  new_content
+              )
+              new_content = re.sub(
+                  r"self\.max_workers\s*=\s*.+",
+                  "self.max_workers = 1  # [CI Auto-Patch] Forced single thread",
+                  new_content
+              )
+              
+              # 2. 给所有的事件等待 .wait() 强制加上超时，防止底层异常导致无限卡顿
+              new_content = new_content.replace(
+                  "self._index_ready_event.wait()",
+                  "self._index_ready_event.wait(timeout=15.0)  # [CI Auto-Patch] Added timeout protection"
+              )
+
+              # 如果文件被成功打上补丁，就覆写回去
+              if new_content != content:
+                  with open(fname, "w", encoding="utf-8") as f:
+                      f.write(new_content)
+                  print(f"✅ Successfully patched deadlocks in {fname}")
           '
 
       - name: Generate main.py (多线程与内存优化版)
