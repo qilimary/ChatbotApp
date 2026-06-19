@@ -174,11 +174,9 @@ jobs:
       - name: Generate main.py (Ultimate Crash-Free Version)
         run: |
           python3 -c '
-          # 使用 r""" 防止底层的 \n 等被转义而引起 python 语法错误导致闪退
           code = r"""# -*- coding: utf-8 -*-
           import os, sys, traceback, threading, json, time, re, gc
           
-          # 【杜绝日志暴涨与控制台阻塞渲染】
           os.environ["KIVY_NO_FILELOG"] = "1"
           os.environ["KIVY_NO_CONSOLELOG"] = "1"
 
@@ -207,26 +205,27 @@ jobs:
           from kivy.uix.slider import Slider
           from kivy.properties import NumericProperty
 
-          # 体验优化：修复打字被软键盘遮挡的问题，平滑将界面往上推
-          Window.softinput_mode = "below_target"
+          # 恢复最原生的输入法弹出模式，绝不会遮挡和锁死
+          Window.softinput_mode = "pan"
           
-          # ================== 全局极简/现代色彩体系 ==================
-          COLOR_BG = (0.95, 0.95, 0.97, 1)          # 极地灰白背景
-          COLOR_TITLE_BG = (1, 1, 1, 1)             # 纯白导航栏
-          COLOR_TITLE_FG = (0.05, 0.05, 0.05, 1)    # 导航栏深灰字
-          COLOR_TITLE_BORDER = (0.88, 0.88, 0.88, 1)# 隐约分隔线
-          COLOR_ACCENT = (0.0, 0.48, 1.0, 1)        # 苹果经典蓝 (提亮交互)
+          # 全局极简/现代色彩体系
+          COLOR_BG = (0.95, 0.95, 0.97, 1)          
+          COLOR_TITLE_BG = (1, 1, 1, 1)             
+          COLOR_TITLE_FG = (0.05, 0.05, 0.05, 1)    
+          COLOR_TITLE_BORDER = (0.88, 0.88, 0.88, 1)
+          COLOR_ACCENT = (0.0, 0.48, 1.0, 1)        
           
           COLOR_USER_BG = (0.0, 0.48, 1.0, 1)
           COLOR_USER_FG = (1, 1, 1, 1)
-          COLOR_BOT_BG = (1, 1, 1, 1)               # 机器人回复全白气泡
+          COLOR_BOT_BG = (1, 1, 1, 1)               
           COLOR_BOT_FG = (0.1, 0.1, 0.1, 1)
-          COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)     # 苹果红
+          COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)     
 
           Window.clearcolor = COLOR_BG
 
+          # 严格的中文字体筛选，去除了会导致特殊符号变成方框的 Emoji 字体
           CJK_FONT = "Roboto"
-          for _fp in ["/system/fonts/DroidSansFallback.ttf","/system/fonts/NotoSansCJK-Regular.ttc","/system/fonts/NotoSerifCJK-Regular.ttc","/system/fonts/NotoColorEmoji.ttf","/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
+          for _fp in ["/system/fonts/NotoSansCJK-Regular.ttc", "/system/fonts/DroidSansFallback.ttf", "/system/fonts/NotoSerifCJK-Regular.ttc", "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
               if os.path.exists(_fp):
                   CJK_FONT = _fp
                   break
@@ -235,7 +234,6 @@ jobs:
               if not text: return text
               return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
 
-          # ================== 现代风格核心组件 ==================
           class ModernButton(ButtonBehavior, Label):
               def __init__(self, bg_color=COLOR_ACCENT, corner_radius=8, **kwargs):
                   super().__init__(**kwargs)
@@ -293,20 +291,13 @@ jobs:
                   self.background_active = ""
                   self.cursor_color = COLOR_ACCENT
                   with self.canvas.before:
-                      self._render_color = Color(0.92, 0.92, 0.93, 1)
+                      self._render_color = Color(0.95, 0.95, 0.96, 1)
                       self._bg = RoundedRectangle(radius=[dp(18)])
                   self.bind(pos=self._update_bg, size=self._update_bg)
                   
               def _update_bg(self, *args):
                   self._bg.pos = self.pos
                   self._bg.size = self.size
-
-              def set_disabled_style(self, is_disabled):
-                  self.readonly = is_disabled
-                  if is_disabled:
-                      self._render_color.rgba = (0.85, 0.85, 0.88, 1)
-                  else:
-                      self._render_color.rgba = (0.95, 0.95, 0.96, 1)
 
           class HistoryItem(ButtonBehavior, BoxLayout):
               def __init__(self, record, app_ref, **kwargs):
@@ -365,7 +356,6 @@ jobs:
               def on_release(self):
                   self.app_ref.load_session(self.record)
 
-          # ================== 现代聊天气泡 (响应式自适应+尖角) ==================
           class ChatBubble(Label):
               def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
                   super().__init__(**kwargs)
@@ -436,7 +426,6 @@ jobs:
                   self.height = val + dp(8)
 
 
-          # ================== 主 APP (抗丢帧与预热引擎) ==================
           class ChatApp(App):
               chat_font_size = NumericProperty(14)
 
@@ -477,7 +466,7 @@ jobs:
 
                   main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
                   
-                  # ---- 导航栏 (现代化) ----
+                  # ---- 导航栏 ----
                   title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(48))
                   with title_bar.canvas.before:
                       Color(*COLOR_TITLE_BG)
@@ -491,19 +480,20 @@ jobs:
                       title_bar._line.size = (title_bar.width, dp(1))
                   title_bar.bind(pos=update_title_bg, size=update_title_bg)
                   
-                  left_box = BoxLayout(size_hint=(None, 1), width=dp(100), padding=[dp(4), dp(0)])
-                  menu_btn = TopBarButton(text="☰", font_name=CJK_FONT, font_size=dp(24), size_hint=(None, 1), width=dp(46))
+                  left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
+                  # 彻底解决乱码：全部改用纯中文文本按钮
+                  menu_btn = TopBarButton(text="菜单", font_name=CJK_FONT, font_size=dp(15), size_hint=(None, 1), width=dp(50))
                   menu_btn.bind(on_release=self.open_drawer)
-                  font_btn = TopBarButton(text="⚙", font_name=CJK_FONT, font_size=dp(20), size_hint=(None, 1), width=dp(46))
+                  font_btn = TopBarButton(text="字体", font_name=CJK_FONT, font_size=dp(15), size_hint=(None, 1), width=dp(50))
                   font_btn.bind(on_release=self.show_font_settings)
                   left_box.add_widget(menu_btn)
                   left_box.add_widget(font_btn)
                   
                   self.title_lbl = Label(text="李尔 (核心加载中)", font_name=CJK_FONT, font_size=dp(16), bold=True, color=COLOR_TITLE_FG)
                   
-                  right_box = BoxLayout(size_hint=(None, 1), width=dp(100), padding=[dp(0), dp(0), dp(4), dp(0)])
-                  right_box.add_widget(Label(size_hint=(None, 1), width=dp(50)))
-                  new_btn = TopBarButton(text="✎", font_name=CJK_FONT, font_size=dp(22), size_hint=(None, 1), width=dp(46))
+                  right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
+                  right_box.add_widget(Label(size_hint=(1, 1)))
+                  new_btn = TopBarButton(text="新建", font_name=CJK_FONT, font_size=dp(15), size_hint=(None, 1), width=dp(50))
                   new_btn.bind(on_release=lambda x: self.start_new_session())
                   right_box.add_widget(new_btn)
                   
@@ -519,7 +509,7 @@ jobs:
                   self.scroll.add_widget(self.chat_layout)
                   main_layout.add_widget(self.scroll)
 
-                  # ---- 输入区 (无缝圆角) ----
+                  # ---- 输入区 ----
                   input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(60), spacing=dp(10), padding=[dp(12), dp(10), dp(12), dp(10)])
                   with input_area.canvas.before:
                       Color(*COLOR_TITLE_BG)
@@ -533,9 +523,8 @@ jobs:
                       input_area._line.size = (input_area.width, dp(1))
                   input_area.bind(pos=update_input_bg, size=update_input_bg)
                   
-                  # 体验优化：预热完成前，输入框被锁定不可用，防止用户发给空气
-                  self.text_input = RoundedInput(hint_text="🤖 引擎初始化中请稍候...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
-                  self.text_input.set_disabled_style(True)
+                  # 彻底解决键盘死锁：移除所有禁用属性，恢复最高优先级响应
+                  self.text_input = RoundedInput(hint_text="系统初始化中请稍等...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
                   input_area.add_widget(self.text_input)
                   
                   self.send_btn = ModernButton(text="请等待", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
@@ -585,7 +574,6 @@ jobs:
                   self.root.add_widget(self.drawer)
                   self.refresh_sidebar()
 
-                  # ==== 后台静默加载：第一次由于把词库加载进内存需要时间，在这里等待 ====
                   threading.Thread(target=self._load_backend_thread, daemon=True).start()
                   return self.root
 
@@ -604,7 +592,6 @@ jobs:
               def _on_backend_ready(self, initial_result):
                   self.is_ready = True
                   self.title_lbl.text = "李尔"
-                  self.text_input.set_disabled_style(False)
                   self.text_input.hint_text = "输入消息…"
                   self.send_btn.text = "发送"
                   self.send_btn.set_disabled(False)
@@ -853,7 +840,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.8
+          version = 1.0.9
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
@@ -882,7 +869,6 @@ jobs:
           '
 
       - name: Build APK
-        # 移除了掩盖错误的 `| tee build.log` 管道，加入强错误阻断
         run: |
           set -eo pipefail
           buildozer -v android debug
