@@ -2,7 +2,6 @@
 import os, sys, traceback, threading, json, time, re, gc
 os.environ["KIVY_NO_FILELOG"] = "1"
 os.environ["KIVY_NO_CONSOLELOG"] = "1"
-
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(APP_DIR)
 if APP_DIR not in sys.path:
@@ -28,10 +27,9 @@ from kivy.uix.popup import Popup
 from kivy.uix.slider import Slider
 from kivy.properties import NumericProperty
 
-# 恢复最原生的输入法弹出模式，绝不会遮挡和锁死
 Window.softinput_mode = "pan"
 
-# 全局极简/现代色彩体系
+# ---------- 全局色彩 ----------
 COLOR_BG = (0.95, 0.95, 0.97, 1)
 COLOR_TITLE_BG = (1, 1, 1, 1)
 COLOR_TITLE_FG = (0.05, 0.05, 0.05, 1)
@@ -42,24 +40,28 @@ COLOR_USER_FG = (1, 1, 1, 1)
 COLOR_BOT_BG = (1, 1, 1, 1)
 COLOR_BOT_FG = (0.1, 0.1, 0.1, 1)
 COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)
-
 Window.clearcolor = COLOR_BG
 
-# 严格的中文字体筛选，去除了看起比较奇怪的Serif衬线字体，保留最标准的无衬线体
+# ---------- 优先使用通用中文字体 ----------
 CJK_FONT = "Roboto"
 for _fp in [
     "/system/fonts/DroidSansFallback.ttf",
     "/system/fonts/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"
+    "/system/fonts/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",
 ]:
     if os.path.exists(_fp):
         CJK_FONT = _fp
         break
 
+
 def strip_emojis(text):
     if not text:
         return text
-    return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
+    return re.sub(
+        r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text
+    )
+
 
 class ModernButton(ButtonBehavior, Label):
     def __init__(self, bg_color=COLOR_ACCENT, corner_radius=8, **kwargs):
@@ -88,9 +90,15 @@ class ModernButton(ButtonBehavior, Label):
         if self._is_disabled:
             return
         if value == "down":
-            self._render_color.rgba = (self.bg_color[0]*0.8, self.bg_color[1]*0.8, self.bg_color[2]*0.8, self.bg_color[3])
+            self._render_color.rgba = (
+                self.bg_color[0] * 0.8,
+                self.bg_color[1] * 0.8,
+                self.bg_color[2] * 0.8,
+                self.bg_color[3],
+            )
         else:
             self._render_color.rgba = self.bg_color
+
 
 class TopBarButton(ButtonBehavior, Label):
     def __init__(self, **kwargs):
@@ -111,18 +119,16 @@ class TopBarButton(ButtonBehavior, Label):
         else:
             self._render_color.rgba = (0, 0, 0, 0)
 
+
 class RoundedInput(TextInput):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.background_color = (0,0,0,0)
+        self.background_color = (0, 0, 0, 0)
         self.background_normal = ""
         self.background_active = ""
         self.cursor_color = COLOR_ACCENT
-        # 强制设置输入的字体颜色为深灰色，解决“打字全是空白”的问题
-        self.foreground_color = (0.1, 0.1, 0.1, 1)
-        # 提升长按唤出键盘的稳定性和复制粘贴功能
-        self.use_bubble = True 
-        self.use_handles = True 
+        self.foreground_color = (0.1, 0.1, 0.1, 1)        # 输入文字可见
+        self.hint_text_color = (0.5, 0.5, 0.5, 1)         # 提示文字可见
         with self.canvas.before:
             self._render_color = Color(0.95, 0.95, 0.96, 1)
             self._bg = RoundedRectangle(radius=[dp(18)])
@@ -131,6 +137,7 @@ class RoundedInput(TextInput):
     def _update_bg(self, *args):
         self._bg.pos = self.pos
         self._bg.size = self.size
+
 
 class HistoryItem(ButtonBehavior, BoxLayout):
     def __init__(self, record, app_ref, **kwargs):
@@ -141,18 +148,29 @@ class HistoryItem(ButtonBehavior, BoxLayout):
         self.size_hint_y = None
         self.height = dp(64)
         self.padding = [dp(16), dp(12)]
-
         title_text = record.get("preview", "新对话")
-        self.lbl = Label(text=title_text, font_name=CJK_FONT, font_size=dp(15), color=(0.1, 0.1, 0.1, 1), halign="left", valign="middle")
-        self.lbl.bind(size=lambda inst, val: setattr(self.lbl, "text_size", (val[0]-dp(10), val[1])))
+        self.lbl = Label(
+            text=title_text,
+            font_name=CJK_FONT,
+            font_size=dp(15),
+            color=(0.1, 0.1, 0.1, 1),
+            halign="left",
+            valign="middle",
+        )
+        self.lbl.bind(
+            size=lambda inst, val: setattr(
+                self.lbl, "text_size", (val[0] - dp(10), val[1])
+            )
+        )
         self.add_widget(self.lbl)
-
         with self.canvas.before:
             self._render_color = Color(1, 1, 1, 1)
             self._bg = Rectangle(pos=self.pos, size=self.size)
         with self.canvas.after:
             Color(*COLOR_TITLE_BORDER)
-            self.line = Rectangle(pos=(self.x + dp(16), self.y), size=(self.width - dp(32), dp(1)))
+            self.line = Rectangle(
+                pos=(self.x + dp(16), self.y), size=(self.width - dp(32), dp(1))
+            )
         self.bind(pos=self._update_bg, size=self._update_bg)
 
     def _update_bg(self, *args):
@@ -170,7 +188,7 @@ class HistoryItem(ButtonBehavior, BoxLayout):
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
             self._lp = Clock.schedule_once(self._do_long_press, 0.6)
-        return super().on_touch_down(touch)
+            return super().on_touch_down(touch)
 
     def on_touch_up(self, touch):
         if hasattr(self, "_lp"):
@@ -188,6 +206,7 @@ class HistoryItem(ButtonBehavior, BoxLayout):
     def on_release(self):
         self.app_ref.load_session(self.record)
 
+
 class ChatBubble(Label):
     def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
         super().__init__(**kwargs)
@@ -198,10 +217,8 @@ class ChatBubble(Label):
         self.font_size = dp(font_size) if not is_error else dp(font_size - 2)
         self.size_hint = (None, None)
         self.halign = "left"
-        self.valign = "top"  # 修复为Top对齐，保障多行文本渲染准确
-        self.line_height = 1.3 # 增加行距，更适合阅读大段文本
+        self.valign = "middle"
         self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
-
         bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
         with self.canvas.before:
             Color(*bg)
@@ -217,20 +234,20 @@ class ChatBubble(Label):
         self.text_size = (None, None)
         self.texture_update()
         max_w = Window.width * 0.72
-        
-        # 精确测算宽度并确保换行生效
-        actual_w = self.texture_size[0]
-        if actual_w > max_w:
-            actual_w = max_w
-            self.text_size = (actual_w, None)
+        if self.texture_size[0] > max_w:
+            self.text_size = (max_w, None)
             self.texture_update()
-            
-        self.text_size = (actual_w, self.texture_size[1])
-        self.size = (actual_w + dp(28), self.texture_size[1] + dp(20))
+        w, h = self.texture_size
+        if w == 0:
+            w = dp(20)
+        if h == 0:
+            h = dp(20)
+        self.size = (w + dp(28), h + dp(20))
 
     def _update_bg(self, *args):
         self._bg.pos = self.pos
         self._bg.size = self.size
+
 
 class MessageRow(BoxLayout):
     def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
@@ -239,11 +256,11 @@ class MessageRow(BoxLayout):
         self.size_hint_y = None
         self.spacing = dp(8)
         self.padding = (dp(12), dp(4))
-
-        self.bubble = ChatBubble(text, is_user=is_user, is_error=is_error, font_size=font_size)
+        self.bubble = ChatBubble(
+            text, is_user=is_user, is_error=is_error, font_size=font_size
+        )
         spacer = BoxLayout(size_hint_x=1)
         avatar_spacer = BoxLayout(size_hint_x=None, width=dp(5))
-
         if is_user:
             self.add_widget(spacer)
             self.add_widget(self.bubble)
@@ -252,11 +269,11 @@ class MessageRow(BoxLayout):
             self.add_widget(avatar_spacer)
             self.add_widget(self.bubble)
             self.add_widget(spacer)
-
         self.bubble.bind(height=self._update_height)
 
     def _update_height(self, inst, val):
         self.height = val + dp(8)
+
 
 class ChatApp(App):
     chat_font_size = NumericProperty(14)
@@ -278,13 +295,15 @@ class ChatApp(App):
             if os.path.exists(SETTINGS_FILE):
                 with open(SETTINGS_FILE, "r") as f:
                     self.chat_font_size = json.load(f).get("font_size", 14)
-        except: pass
+        except:
+            pass
 
     def save_settings(self):
         try:
             with open(SETTINGS_FILE, "w") as f:
                 json.dump({"font_size": self.chat_font_size}, f)
-        except: pass
+        except:
+            pass
 
     def on_chat_font_size(self, instance, value):
         self.save_settings()
@@ -294,38 +313,68 @@ class ChatApp(App):
     def build(self):
         self.load_all_history()
         self.root = FloatLayout()
+
         main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
 
         # ---- 导航栏 ----
-        title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(48))
+        title_bar = BoxLayout(
+            orientation="horizontal", size_hint=(1, None), height=dp(48)
+        )
         with title_bar.canvas.before:
             Color(*COLOR_TITLE_BG)
             title_bar._bg = Rectangle(pos=title_bar.pos, size=title_bar.size)
             Color(*COLOR_TITLE_BORDER)
-            title_bar._line = Rectangle(pos=(title_bar.x, title_bar.y), size=(title_bar.width, dp(1)))
+            title_bar._line = Rectangle(
+                pos=(title_bar.x, title_bar.y), size=(title_bar.width, dp(1))
+            )
 
         def update_title_bg(*args):
             title_bar._bg.pos = title_bar.pos
             title_bar._bg.size = title_bar.size
             title_bar._line.pos = (title_bar.x, title_bar.y)
             title_bar._line.size = (title_bar.width, dp(1))
+
         title_bar.bind(pos=update_title_bg, size=update_title_bg)
 
         left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
-        # 菜单按钮改成标准三条杠
-        menu_btn = TopBarButton(text="≡", font_name="Roboto", font_size=dp(28), size_hint=(None, 1), width=dp(50))
+        menu_btn = TopBarButton(
+            text="≡",              # 三条杠
+            font_name=CJK_FONT,
+            font_size=dp(20),
+            size_hint=(None, 1),
+            width=dp(50),
+        )
         menu_btn.bind(on_release=self.open_drawer)
-        font_btn = TopBarButton(text="字体", font_name=CJK_FONT, font_size=dp(15), size_hint=(None, 1), width=dp(50))
+        font_btn = TopBarButton(
+            text="字体",
+            font_name=CJK_FONT,
+            font_size=dp(15),
+            size_hint=(None, 1),
+            width=dp(50),
+        )
         font_btn.bind(on_release=self.show_font_settings)
         left_box.add_widget(menu_btn)
         left_box.add_widget(font_btn)
 
-        self.title_lbl = Label(text="李尔 (核心加载中)", font_name=CJK_FONT, font_size=dp(16), bold=True, color=COLOR_TITLE_FG)
+        self.title_lbl = Label(
+            text="李尔 (核心加载中)",
+            font_name=CJK_FONT,
+            font_size=dp(16),
+            bold=True,
+            color=COLOR_TITLE_FG,
+        )
 
-        right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
+        right_box = BoxLayout(
+            size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)]
+        )
         right_box.add_widget(Label(size_hint=(1, 1)))
-        # 新建按钮改成加号
-        new_btn = TopBarButton(text="+", font_name="Roboto", font_size=dp(28), size_hint=(None, 1), width=dp(50))
+        new_btn = TopBarButton(
+            text="＋",            # 加号
+            font_name=CJK_FONT,
+            font_size=dp(20),
+            size_hint=(None, 1),
+            width=dp(50),
+        )
         new_btn.bind(on_release=lambda x: self.start_new_session())
         right_box.add_widget(new_btn)
 
@@ -334,39 +383,67 @@ class ChatApp(App):
         title_bar.add_widget(right_box)
         main_layout.add_widget(title_bar)
 
-        # ---- 聊天显示区 ----
-        # 增设显眼的滚动条，允许按住拖动
+        # ---- 聊天区（带滚动条）----
         self.scroll = ScrollView(
-            size_hint=(1, 1), 
-            scroll_type=['bars', 'content'], 
-            bar_width=dp(6),
-            bar_color=[0.6, 0.6, 0.6, 0.7], 
-            bar_inactive_color=[0.7, 0.7, 0.7, 0.3]
+            size_hint=(1, 1),
+            bar_width=dp(4),
+            bar_color=(0.5, 0.5, 0.5, 0.7),
+            bar_inactive_color=(0.5, 0.5, 0.5, 0.3),
+            scroll_type=["bars", "content"],
         )
-        self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
+        self.chat_layout = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(12),
+            padding=[dp(8), dp(16), dp(8), dp(16)],
+        )
         self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
         self.scroll.add_widget(self.chat_layout)
         main_layout.add_widget(self.scroll)
 
         # ---- 输入区 ----
-        input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(60), spacing=dp(10), padding=[dp(12), dp(10), dp(12), dp(10)])
+        input_area = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=dp(60),
+            spacing=dp(10),
+            padding=[dp(12), dp(10), dp(12), dp(10)],
+        )
         with input_area.canvas.before:
             Color(*COLOR_TITLE_BG)
             input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
             Color(*COLOR_TITLE_BORDER)
-            input_area._line = Rectangle(pos=(input_area.x, input_area.top-1), size=(input_area.width, dp(1)))
+            input_area._line = Rectangle(
+                pos=(input_area.x, input_area.top - 1),
+                size=(input_area.width, dp(1)),
+            )
 
         def update_input_bg(*args):
             input_area._bg.pos = input_area.pos
             input_area._bg.size = input_area.size
-            input_area._line.pos = (input_area.x, input_area.top-1)
+            input_area._line.pos = (input_area.x, input_area.top - 1)
             input_area._line.size = (input_area.width, dp(1))
+
         input_area.bind(pos=update_input_bg, size=update_input_bg)
 
-        self.text_input = RoundedInput(hint_text="系统初始化中请稍等...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
+        self.text_input = RoundedInput(
+            hint_text="系统初始化中请稍等...",
+            font_name=CJK_FONT,
+            font_size=dp(self.chat_font_size + 1),
+            multiline=True,
+            size_hint=(1, 1),
+            padding=[dp(14), dp(10)],
+        )
         input_area.add_widget(self.text_input)
 
-        self.send_btn = ModernButton(text="请等待", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
+        self.send_btn = ModernButton(
+            text="请等待",
+            font_name=CJK_FONT,
+            font_size=dp(14),
+            size_hint=(None, 1),
+            width=dp(68),
+            bg_color=COLOR_ACCENT,
+        )
         self.send_btn.set_disabled(True)
         self.send_btn.bind(on_release=self.send_message)
         input_area.add_widget(self.send_btn)
@@ -374,29 +451,54 @@ class ChatApp(App):
 
         self.root.add_widget(main_layout)
 
-        # ---- 侧边栏及遮罩层 ----
-        self.overlay = Button(background_color=(0,0,0,1), opacity=0, size_hint=(1, 1), pos_hint={"x": 2, "y": 0})
+        # ---- 侧边栏遮罩 ----
+        self.overlay = Button(
+            background_color=(0, 0, 0, 1),
+            opacity=0,
+            size_hint=(1, 1),
+            pos_hint={"x": 2, "y": 0},
+        )
         self.overlay.bind(on_release=self.close_drawer)
         self.root.add_widget(self.overlay)
 
-        self.drawer = BoxLayout(orientation="vertical", size_hint=(0.7, 1), pos_hint={"x": -0.7, "y": 0})
+        # ---- 侧边栏主体 ----
+        self.drawer = BoxLayout(
+            orientation="vertical", size_hint=(0.7, 1), pos_hint={"x": -0.7, "y": 0}
+        )
         with self.drawer.canvas.before:
             Color(*COLOR_TITLE_BG)
             self.drawer._bg = Rectangle(pos=self.drawer.pos, size=self.drawer.size)
-        self.drawer.bind(pos=lambda inst, val: setattr(self.drawer._bg, "pos", val), size=lambda inst, val: setattr(self.drawer._bg, "size", val))
+        self.drawer.bind(
+            pos=lambda inst, val: setattr(self.drawer._bg, "pos", val),
+            size=lambda inst, val: setattr(self.drawer._bg, "size", val),
+        )
 
-        drawer_title = Label(text="最近对话", font_name=CJK_FONT, font_size=dp(18), bold=True, color=COLOR_TITLE_FG, size_hint=(1, None), height=dp(50))
+        drawer_title = Label(
+            text="最近对话",
+            font_name=CJK_FONT,
+            font_size=dp(18),
+            bold=True,
+            color=COLOR_TITLE_FG,
+            size_hint=(1, None),
+            height=dp(50),
+        )
         with drawer_title.canvas.before:
             Color(*COLOR_TITLE_BG)
-            drawer_title._bg = Rectangle(pos=drawer_title.pos, size=drawer_title.size)
+            drawer_title._bg = Rectangle(
+                pos=drawer_title.pos, size=drawer_title.size
+            )
             Color(*COLOR_TITLE_BORDER)
-            drawer_title._line = Rectangle(pos=(drawer_title.x, drawer_title.y), size=(drawer_title.width, dp(1)))
+            drawer_title._line = Rectangle(
+                pos=(drawer_title.x, drawer_title.y),
+                size=(drawer_title.width, dp(1)),
+            )
 
         def update_dt_bg(*args):
             drawer_title._bg.pos = drawer_title.pos
             drawer_title._bg.size = drawer_title.size
             drawer_title._line.pos = (drawer_title.x, drawer_title.y)
             drawer_title._line.size = (drawer_title.width, dp(1))
+
         drawer_title.bind(pos=update_dt_bg, size=update_dt_bg)
         self.drawer.add_widget(drawer_title)
 
@@ -406,12 +508,21 @@ class ChatApp(App):
         drawer_scroll.add_widget(self.sidebar_layout)
         self.drawer.add_widget(drawer_scroll)
 
-        clear_btn = ModernButton(text="清空所有记录", font_name=CJK_FONT, font_size=dp(15), size_hint=(1, None), height=dp(50), corner_radius=0, bg_color=COLOR_ERROR_BG)
+        clear_btn = ModernButton(
+            text="清空所有记录",
+            font_name=CJK_FONT,
+            font_size=dp(15),
+            size_hint=(1, None),
+            height=dp(50),
+            corner_radius=0,
+            bg_color=COLOR_ERROR_BG,
+        )
         clear_btn.bind(on_release=self.show_clear_all_dialog)
         self.drawer.add_widget(clear_btn)
-        self.root.add_widget(self.drawer)
 
+        self.root.add_widget(self.drawer)
         self.refresh_sidebar()
+
         threading.Thread(target=self._load_backend_thread, daemon=True).start()
         return self.root
 
@@ -437,21 +548,32 @@ class ChatApp(App):
             self.current_record["id"] = self.session_id
         msgs = initial_result.get("messages", [])
         if msgs:
-            # 复用 _on_message_success，确保换行逻辑统一
-            self._on_message_success([m["text"] for m in msgs])
+            self._on_message_success(msgs)
+        # 开场白显示在顶部
+        Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 1), 0.5)
 
     @mainthread
     def _on_backend_error(self, err):
         self.title_lbl.text = "李尔 (组件故障)"
-        self.chat_layout.add_widget(MessageRow("引擎预热失败，请重试。\n" + str(err), is_user=False, is_error=True))
+        self.chat_layout.add_widget(
+            MessageRow("引擎预热失败，请重试。\n" + str(err), is_user=False, is_error=True)
+        )
 
     def show_font_settings(self, *args):
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
-        lbl = Label(text=f"当前字号: {int(self.chat_font_size)}", font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
+        lbl = Label(
+            text=f"当前字号: {int(self.chat_font_size)}",
+            font_name=CJK_FONT,
+            color=(1, 1, 1, 1),
+            size_hint_y=None,
+            height=dp(30),
+        )
         slider = Slider(min=10, max=24, step=1, value=self.chat_font_size)
+
         def on_slider_val(inst, val):
             self.chat_font_size = val
             lbl.text = f"当前字号: {int(val)}"
+
         slider.bind(value=on_slider_val)
         btn_box = BoxLayout(size_hint_y=None, height=dp(40))
         btn_close = ModernButton(text="完成", font_name=CJK_FONT, bg_color=COLOR_ACCENT)
@@ -459,44 +581,75 @@ class ChatApp(App):
         content.add_widget(lbl)
         content.add_widget(slider)
         content.add_widget(btn_box)
-        popup = Popup(title="调节字体大小", title_font=CJK_FONT, content=content, size_hint=(0.85, 0.35), auto_dismiss=True)
+        popup = Popup(
+            title="调节字体大小",
+            title_font=CJK_FONT,
+            content=content,
+            size_hint=(0.85, 0.35),
+            auto_dismiss=True,
+        )
         btn_close.bind(on_release=popup.dismiss)
         popup.open()
 
     def show_delete_dialog(self, record):
         content = BoxLayout(orientation="vertical", spacing=dp(15), padding=dp(15))
-        content.add_widget(Label(text="是否删除此记录？", font_name=CJK_FONT, color=(1,1,1,1)))
+        content.add_widget(
+            Label(text="是否删除此记录？", font_name=CJK_FONT, color=(1, 1, 1, 1))
+        )
         btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(15))
         btn_yes = ModernButton(text="删除", font_name=CJK_FONT, bg_color=COLOR_ERROR_BG)
-        btn_no = ModernButton(text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1))
+        btn_no = ModernButton(
+            text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1)
+        )
         btn_box.add_widget(btn_yes)
         btn_box.add_widget(btn_no)
         content.add_widget(btn_box)
-        popup = Popup(title="提示", title_font=CJK_FONT, content=content, size_hint=(0.8, 0.28), auto_dismiss=False)
+        popup = Popup(
+            title="提示",
+            title_font=CJK_FONT,
+            content=content,
+            size_hint=(0.8, 0.28),
+            auto_dismiss=False,
+        )
         btn_yes.bind(on_release=lambda x: self.delete_history(record, popup))
         btn_no.bind(on_release=popup.dismiss)
         popup.open()
 
     def show_clear_all_dialog(self, *args):
         content = BoxLayout(orientation="vertical", spacing=dp(15), padding=dp(15))
-        content.add_widget(Label(text="确认清空所有聊天记录？", font_name=CJK_FONT, color=(1,1,1,1)))
+        content.add_widget(
+            Label(text="确认清空所有聊天记录？", font_name=CJK_FONT, color=(1, 1, 1, 1))
+        )
         btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(15))
         btn_yes = ModernButton(text="清空", font_name=CJK_FONT, bg_color=COLOR_ERROR_BG)
-        btn_no = ModernButton(text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1))
+        btn_no = ModernButton(
+            text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1)
+        )
         btn_box.add_widget(btn_yes)
         btn_box.add_widget(btn_no)
         content.add_widget(btn_box)
-        popup = Popup(title="警告", title_font=CJK_FONT, content=content, size_hint=(0.8, 0.28), auto_dismiss=False)
+        popup = Popup(
+            title="警告",
+            title_font=CJK_FONT,
+            content=content,
+            size_hint=(0.8, 0.28),
+            auto_dismiss=False,
+        )
         btn_yes.bind(on_release=lambda x: self.clear_all_history(popup))
         btn_no.bind(on_release=popup.dismiss)
         popup.open()
 
     def save_all_history(self):
         try:
-            valid_histories = [h for h in self.histories if any(m.get("is_user") for m in h.get("messages", []))]
+            valid_histories = [
+                h
+                for h in self.histories
+                if any(m.get("is_user") for m in h.get("messages", []))
+            ]
             with open(HISTORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(valid_histories[:15], f, ensure_ascii=False)
-        except: pass
+        except:
+            pass
 
     def refresh_sidebar(self):
         self.sidebar_layout.clear_widgets()
@@ -520,13 +673,16 @@ class ChatApp(App):
 
     def close_drawer(self, *args):
         anim = Animation(opacity=0, d=0.2)
-        anim.bind(on_complete=lambda *a: setattr(self.overlay, "pos_hint", {"x": 2, "y": 0}))
+        anim.bind(
+            on_complete=lambda *a: setattr(self.overlay, "pos_hint", {"x": 2, "y": 0})
+        )
         anim.start(self.overlay)
         Animation(pos_hint={"x": -0.7}, d=0.2, t="in_quad").start(self.drawer)
 
     def load_session(self, record):
         self.close_drawer()
-        if record == self.current_record: return
+        if record == self.current_record:
+            return
         self.current_record = record
         self.session_id = record.get("id")
         self.chat_layout.clear_widgets()
@@ -537,7 +693,6 @@ class ChatApp(App):
             Clock.schedule_once(self._staggered_load_step, 0)
         else:
             self._scroll_to_bottom()
-            
         if record in self.histories:
             self.histories.remove(record)
         self.histories.insert(0, record)
@@ -549,9 +704,17 @@ class ChatApp(App):
             self._scroll_to_bottom()
             return
         for _ in range(2):
-            if self._stagger_load_index >= len(self._stagger_messages): break
+            if self._stagger_load_index >= len(self._stagger_messages):
+                break
             m = self._stagger_messages[self._stagger_load_index]
-            self.chat_layout.add_widget(MessageRow(m["text"], is_user=m.get("is_user"), is_error=False, font_size=self.chat_font_size))
+            self.chat_layout.add_widget(
+                MessageRow(
+                    m["text"],
+                    is_user=m.get("is_user"),
+                    is_error=False,
+                    font_size=self.chat_font_size,
+                )
+            )
             self._stagger_load_index += 1
         Clock.schedule_once(self._staggered_load_step, 0)
 
@@ -582,7 +745,8 @@ class ChatApp(App):
         self.current_record = {"id": None, "preview": "新对话", "messages": []}
         self.session_id = None
         self.close_drawer()
-        if not self.is_ready: return
+        if not self.is_ready:
+            return
         threading.Thread(target=self._new_session_thread, daemon=True).start()
 
     def _new_session_thread(self):
@@ -590,43 +754,48 @@ class ChatApp(App):
             result = self.chatbot_module.web_start_session()
             self.session_id = result.get("session_id")
             self.current_record["id"] = self.session_id
-            Clock.schedule_once(lambda dt: self._on_message_success([m["text"] for m in result.get("messages", [])]))
+            Clock.schedule_once(
+                lambda dt: self._on_message_success(result.get("messages", []))
+            )
         except Exception as e:
             err = traceback.format_exc()
             Clock.schedule_once(lambda dt: self._on_message_error(err))
 
     def _scroll_to_bottom(self):
-        # 智能对齐：如果没有超过一页高度，排在最上面；超过了则滑到底部
-        def do_scroll(dt):
-            if self.chat_layout.height > self.scroll.height:
-                self.scroll.scroll_y = 0
-            else:
-                self.scroll.scroll_y = 1
-        Clock.schedule_once(do_scroll, 0.1)
+        Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
 
     def send_message(self, instance):
-        if not self.is_ready or self.is_processing: return
+        if not self.is_ready or self.is_processing:
+            return
         text = strip_emojis((self.text_input.text or "").strip())
-        if not text: return
-        is_first_message = not any(m.get("is_user") for m in self.current_record.get("messages", []))
+        if not text:
+            return
+        is_first_message = not any(
+            m.get("is_user") for m in self.current_record.get("messages", [])
+        )
         if is_first_message:
-            self.current_record["preview"] = (text[:12] + "...") if len(text) > 12 else text
-            
-        if self.current_record not in self.histories:
-            self.histories.insert(0, self.current_record)
-            
-        self.chat_layout.add_widget(MessageRow(text, is_user=True, font_size=self.chat_font_size))
+            self.current_record["preview"] = (
+                (text[:12] + "...") if len(text) > 12 else text
+            )
+            if self.current_record not in self.histories:
+                self.histories.insert(0, self.current_record)
+        self.chat_layout.add_widget(
+            MessageRow(text, is_user=True, font_size=self.chat_font_size)
+        )
         self.current_record["messages"].append({"is_user": True, "text": text})
         self._scroll_to_bottom()
         self.save_all_history()
         self.refresh_sidebar()
-        
         self.text_input.text = ""
         self.text_input.focus = False
         self.is_processing = True
         self.send_btn.text = "发送中"
         self.send_btn.set_disabled(True)
-        threading.Thread(target=self._process_message_thread, args=(text,), daemon=True).start()
+        # 重新获取焦点，保证键盘再次弹出
+        Clock.schedule_once(lambda dt: setattr(self.text_input, "focus", True), 0.3)
+        threading.Thread(
+            target=self._process_message_thread, args=(text,), daemon=True
+        ).start()
 
     def _process_message_thread(self, text):
         try:
@@ -647,11 +816,17 @@ class ChatApp(App):
         self.send_btn.text = "发送"
         self.send_btn.set_disabled(False)
         for reply in replies:
-            # 解决无法换行的问题：将可能被转义的 "\\n" 强行转换回系统换行符
-            clean_reply = strip_emojis(reply).replace('\\n', '\n')
-            if not clean_reply.strip(): continue
-            self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
-            self.current_record["messages"].append({"is_user": False, "text": clean_reply})
+            clean_reply = strip_emojis(reply)
+            if not clean_reply.strip():
+                continue
+            self.chat_layout.add_widget(
+                MessageRow(
+                    clean_reply, is_user=False, font_size=self.chat_font_size
+                )
+            )
+            self.current_record["messages"].append(
+                {"is_user": False, "text": clean_reply}
+            )
         self._scroll_to_bottom()
         self.save_all_history()
 
@@ -660,8 +835,16 @@ class ChatApp(App):
         self.is_processing = False
         self.send_btn.text = "发送"
         self.send_btn.set_disabled(False)
-        self.chat_layout.add_widget(MessageRow("【处理异常】请重试", is_user=False, is_error=True, font_size=self.chat_font_size))
+        self.chat_layout.add_widget(
+            MessageRow(
+                "【处理异常】请重试",
+                is_user=False,
+                is_error=True,
+                font_size=self.chat_font_size,
+            )
+        )
         self._scroll_to_bottom()
+
 
 if __name__ == "__main__":
     ChatApp().run()
