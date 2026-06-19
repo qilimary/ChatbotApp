@@ -9,6 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    env:
+      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,8 +22,14 @@ jobs:
           echo "==== 环境信息 ===="
           uname -a
           df -h /
-          echo "HOME=$HOME"
-          echo "PWD=$PWD"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,58 +47,81 @@ jobs:
         run: |
           echo "==== 安装系统依赖 ===="
           sudo apt-get update -y
-          sudo apt-get install -y zip unzip openjdk-17-jdk python3-pip \
+          sudo apt-get install -y zip unzip python3-pip \
             autoconf automake libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             build-essential ccache git libltdl-dev
           echo "==== Java 版本 ===="
           java -version
-          echo "==== JAVA_HOME=$JAVA_HOME ===="
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "==== which java ===="
+          which java
+          readlink -f $(which java)
 
       - name: Install buildozer and gdown
         run: |
           echo "==== 安装 Python 工具 ===="
           python -m pip install --upgrade pip
-          pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1"
+          pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1" "sh>=2.0,<3.0"
           echo "==== buildozer 版本 ===="
           buildozer version
 
-      - name: Cache buildozer
+      - name: Setup Android SDK (官方 action)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            tools
+            platform-tools
+            build-tools;34.0.0
+            platforms;android-34
+
+      - name: Verify SDK and accept licenses
+        run: |
+          echo "==== 检查 SDK 安装情况 ===="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la "$ANDROID_HOME"
+          
+          echo "---- cmdline-tools ----"
+          ls -la "$ANDROID_HOME/cmdline-tools/" 2>/dev/null || echo "无 cmdline-tools"
+          
+          echo "---- build-tools ----"
+          ls -la "$ANDROID_HOME/build-tools/" 2>/dev/null || echo "❌ 无 build-tools"
+          
+          echo "---- platforms ----"
+          ls -la "$ANDROID_HOME/platforms/" 2>/dev/null || echo "❌ 无 platforms"
+          
+          echo "---- tools (旧版) ----"
+          ls -la "$ANDROID_HOME/tools/bin/" 2>/dev/null || echo "无旧版 tools/bin"
+          
+          echo "==== 接受所有 license ===="
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          
+          echo "==== sdkmanager 路径 ===="
+          which sdkmanager
+          sdkmanager --version
+
+      - name: Link SDK to buildozer expected path
+        run: |
+          echo "==== 让 buildozer 能找到 SDK ===="
+          BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          mkdir -p "$(dirname "$BUILD_DIR")"
+          
+          if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then
+            rm -rf "$BUILD_DIR"
+          fi
+          
+          ln -s "$ANDROID_HOME" "$BUILD_DIR"
+          echo "✅ 软链接：$BUILD_DIR -> $ANDROID_HOME"
+          ls -la "$BUILD_DIR/"
+
+      - name: Cache NDK and p4a
         uses: actions/cache@v4
         with:
           path: |
-            ~/.buildozer
-            .buildozer
+            ~/.buildozer/android/platform/android-ndk-r25b
+            ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: buildozer-p4a-v5-${{ runner.os }}
-
-      - name: Pre-install Android SDK and accept licenses
-        run: |
-          echo "==== 预装 Android SDK + 接受所有 license ===="
-          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-          mkdir -p "$ANDROID_HOME/cmdline-tools"
-          
-          echo "---- 下载 cmdline-tools ----"
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
-          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" 2>/dev/null || true
-          
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          echo "---- sdkmanager 路径：----"
-          which sdkmanager
-          
-          echo "---- 接受所有 license ----"
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          
-          echo "---- 安装 platform-tools / build-tools / platforms ----"
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          
-          echo "==== SDK 安装完成，目录： ===="
-          ls -la "$ANDROID_HOME/build-tools/" 2>/dev/null || echo "build-tools 目录不存在！"
-          ls -la "$ANDROID_HOME/platforms/" 2>/dev/null || echo "platforms 目录不存在！"
+          key: ndk-p4a-v2-${{ runner.os }}
 
       - name: Download chatbot zip from Google Drive
         run: |
@@ -362,7 +395,6 @@ jobs:
               ChatApp().run()
           PYEOF
           echo "✅ main.py 已生成 ($(wc -l < main.py) 行)"
-          head -20 main.py
 
       - name: Generate buildozer.spec
         run: |
@@ -384,27 +416,28 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           presplash.duration = 3
+          p4a.branch = stable
 
           [buildozer]
           log_level = 2
           warn_on_root = 1
           SPECEOF
           echo "✅ buildozer.spec 已生成"
-          cat buildozer.spec
 
       - name: Build APK (verbose)
         run: |
           echo "==== 开始构建 APK ===="
-          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          buildozer -v android debug 2>&1 | tee build.log
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          java -version
           
-          echo "==== 构建结束，退出码：${PIPESTATUS[0]} ===="
+          buildozer -v android debug 2>&1 | tee build.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          
+          echo "==== 构建结束，退出码：$EXIT_CODE ===="
           echo "==== bin 目录内容： ===="
           ls -lh bin/ 2>/dev/null || echo "bin 目录不存在！"
           
-          # 检查是否真的生成了 APK
           if ! ls bin/*.apk 2>/dev/null; then
             echo "❌ APK 生成失败"
             exit 1
@@ -433,11 +466,12 @@ jobs:
       - name: Debug info on failure
         if: failure()
         run: |
-          echo "==== 失败时打印最后 200 行构建日志 ===="
-          tail -n 200 build.log 2>/dev/null || echo "无 build.log"
+          echo "==== 失败时打印最后 300 行构建日志 ===="
+          tail -n 300 build.log 2>/dev/null || echo "无 build.log"
           
           echo "==== .buildozer 目录结构 ===="
           find .buildozer -maxdepth 4 -type d 2>/dev/null | head -50
           
-          echo "==== 所有 .log 文件 ===="
-          find . -name "*.log" -exec echo "--- {} ---" \; -exec tail -n 50 {} \; 2>/dev/null
+          echo "==== SDK 路径检查 ===="
+          ls -la "$HOME/.buildozer/android/platform/android-sdk/" 2>/dev/null || echo "buildozer SDK 不存在"
+          ls -la "$ANDROID_HOME/" 2>/dev/null || echo "ANDROID_HOME 不存在"
