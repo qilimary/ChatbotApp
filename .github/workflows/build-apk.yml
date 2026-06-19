@@ -39,17 +39,14 @@ jobs:
         run: |
           echo "==== Java 验证 ===="
           echo "JAVA_HOME=$JAVA_HOME"
-          echo "---- java -version ----"
           java -version 2>&1
-          echo "---- which java ----"
           which java
           readlink -f $(which java)
-          echo "---- $JAVA_HOME 是否存在 ----"
           if [ -d "$JAVA_HOME" ]; then
-            echo "✅ JAVA_HOME 目录存在"
+            echo "JAVA_HOME OK"
             ls "$JAVA_HOME" | head -5
           else
-            echo "❌ JAVA_HOME 目录不存在！"
+            echo "JAVA_HOME NOT FOUND"
             find /opt /usr/lib -name "javac" -type f 2>/dev/null | head -5
           fi
 
@@ -58,9 +55,8 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install system deps (含 expect)
+      - name: Install system deps
         run: |
-          echo "==== 安装系统依赖 + expect ===="
           sudo apt-get update -y
           sudo apt-get install -y zip unzip python3-pip expect \
             autoconf automake libtool pkg-config zlib1g-dev \
@@ -69,102 +65,62 @@ jobs:
 
       - name: Install buildozer and gdown
         run: |
-          echo "==== 安装 Python 工具 ===="
           python -m pip install --upgrade pip
           pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1" "sh>=2.0,<3.0"
-          echo "==== buildozer 版本 ===="
           buildozer version
 
-      - name: Setup Android SDK (license 预写 + expect 兜底)
+      - name: Setup Android SDK
         run: |
-          echo "==== 手动安装 Android SDK ===="
-          
+          echo "==== Install Android SDK ===="
           export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}"
-          echo "使用 JAVA_HOME=$JAVA_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
           java -version 2>&1
-          
-          # 1. 下载 cmdline-tools（固定旧版 11076708，避免新版路径问题）
+
           mkdir -p $ANDROID_HOME/cmdline-tools
           cd /tmp
-          echo "---- 下载 cmdline-tools ----"
           wget --no-verbose https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
           unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
           mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-          
+
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          
-          echo "---- sdkmanager 版本 ----"
           sdkmanager --version
-          
-          # 2. 预写所有 license 文件（双保险第一步：sdkmanager 装包时如果 license 文件存在就不再问）
-          echo "---- 预写 license 文件 ----"
+
+          echo "==== Pre-write license files ===="
           mkdir -p $ANDROID_HOME/licenses
-          cat > $ANDROID_HOME/licenses/android-sdk-license << 'LIC_EOF'
-
-8933bad161af4177641a525b71e2a3b3
-d56f5187479451eabf01fb78af6dfcb131a6481e
-24333f8a63b6825ea9c5514f83c2829b004d1fee
-LIC_EOF
-          cat > $ANDROID_HOME/licenses/android-sdk-preview-license << 'LIC_EOF'
-
-d56f5187479451eabf01fb78af6dfcb131a6481e
-LIC_EOF
-          cat > $ANDROID_HOME/licenses/android-sdk-arm-dbt-license << 'LIC_EOF'
-
-859f317696f67ef3dab8ee7b7e8bf7b6c1aea6e7
-LIC_EOF
-          cat > $ANDROID_HOME/licenses/intel-android-extra-license << 'LIC_EOF'
-
-d975f751698a77b662f1254ddbeed3901e7635aa
-LIC_EOF
-          cat > $ANDROID_HOME/licenses/google-gdk-license << 'LIC_EOF'
-
-33b6a2b64607f11b759f320ef9054a8cd123aaa9
-LIC_EOF
-          cat > $ANDROID_HOME/licenses/mips-android-sysimage-license << 'LIC_EOF'
-
-e9acab5b5fbb560a72cfaecf894e659d05d8a2ab
-LIC_EOF
-          
-          echo "✅ license 文件已写入："
+          printf '\n8933bad161af4177641a525b71e2a3b3\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > $ANDROID_HOME/licenses/android-sdk-license
+          printf '\nd56f5187479451eabf01fb78af6dfcb131a6481e\n' > $ANDROID_HOME/licenses/android-sdk-preview-license
+          printf '\n859f317696f67ef3dab8ee7b7e8bf7b6c1aea6e7\n' > $ANDROID_HOME/licenses/android-sdk-arm-dbt-license
+          printf '\nd975f751698a77b662f1254ddbeed3901e7635aa\n' > $ANDROID_HOME/licenses/intel-android-extra-license
+          printf '\n33b6a2b64607f11b759f320ef9054a8cd123aaa9\n' > $ANDROID_HOME/licenses/google-gdk-license
+          printf '\ne9acab5b5fbb560a72cfaecf894e659d05d8a2ab\n' > $ANDROID_HOME/licenses/mips-android-sysimage-license
           ls -la $ANDROID_HOME/licenses/
-          
-          # 3. 用 expect 跑 sdkmanager --licenses 兜底（双保险第二步）
-          echo "---- 用 expect 接受所有 license ----"
-          expect << 'EXP_EOF' 2>&1 | tail -10
+
+          echo "==== Accept licenses with expect ===="
+          expect -c '
           set timeout 120
           spawn sdkmanager --licenses
           expect {
               -re "y/N" { send "y\r"; exp_continue }
-              -re "Accept\\? \\(y/N\\)" { send "y\r"; exp_continue }
               "All SDK package licenses accepted" { exit 0 }
               eof { exit 0 }
-          }
-          EXP_EOF
-          
-          # 4. 装包（license 文件已存在，应该不再问）
-          echo "---- 安装 platform-tools / build-tools;34.0.0 / platforms;android-34 ----"
+          }' 2>&1 | tail -5 || true
+
+          echo "==== Install SDK packages ===="
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" 2>&1 | tail -10
-          
-          echo "==== SDK 安装完成，目录结构： ===="
+
+          echo "==== SDK installed ===="
           ls -la $ANDROID_HOME/
-          echo "---- build-tools ----"
           ls -la $ANDROID_HOME/build-tools/ 2>&1
-          echo "---- platforms ----"
           ls -la $ANDROID_HOME/platforms/ 2>&1
 
       - name: Link SDK to buildozer expected path
         run: |
-          echo "==== 让 buildozer 能找到 SDK ===="
           BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
           mkdir -p "$(dirname "$BUILD_DIR")"
-          
           if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then
             rm -rf "$BUILD_DIR"
           fi
-          
           ln -s "$ANDROID_HOME" "$BUILD_DIR"
-          echo "✅ 软链接：$BUILD_DIR -> $ANDROID_HOME"
           ls -la "$BUILD_DIR/"
 
       - name: Cache NDK and p4a
@@ -174,56 +130,37 @@ LIC_EOF
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v6-${{ runner.os }}
+          key: ndk-p4a-v7-${{ runner.os }}
 
-      - name: Download chatbot zip from Google Drive
+      - name: Download chatbot zip
         run: |
-          echo "==== 从 Google Drive 下载机器人 zip ===="
           gdown 'https://drive.google.com/uc?id=1_GJVvaM2wKXFAo6mDaaOIpVBhrjAQ7Uf' -O 机器人.zip
-          echo "==== 下载完成，文件大小： ===="
           ls -lh 机器人.zip
-          
-          echo "==== 解压 ===="
           unzip -o 机器人.zip -d 机器人解压/
-          
-          echo "==== 解压后所有文件： ===="
           find 机器人解压/ -type f -exec ls -lh {} \;
 
-      - name: Extract chatbot files to project root
+      - name: Extract chatbot files
         run: |
-          echo "==== 查找 李尔.py 所在目录 ===="
           CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
-          
           if [ -z "$CHATBOT_DIR" ]; then
-            echo "❌ 未找到 李尔.py，zip 内容如下："
+            echo "李尔.py NOT FOUND"
             find 机器人解压/ -type f
             exit 1
           fi
-          
-          echo "✅ 机器人目录：$CHATBOT_DIR"
-          ls -la "$CHATBOT_DIR"
-          
-          echo "==== 拷贝所有 .py 和 .json 到根目录 ===="
+          echo "Chatbot dir: $CHATBOT_DIR"
           cp -v "$CHATBOT_DIR"/*.py .
           cp -v "$CHATBOT_DIR"/*.json .
-          
-          echo "==== 根目录最终内容： ===="
           ls -la
 
-      - name: Generate main.py (chat UI)
+      - name: Generate main.py
         run: |
-          cat << 'PYEOF' > main.py
-          # -*- coding: utf-8 -*-
-          import os
-          import sys
-          import importlib.util
-
+          python3 -c '
+          code = """# -*- coding: utf-8 -*-
+          import os, sys, importlib.util
           APP_DIR = os.path.dirname(os.path.abspath(__file__))
           os.chdir(APP_DIR)
           if APP_DIR not in sys.path:
               sys.path.insert(0, APP_DIR)
-
-
           def load_chatbot_module():
               try:
                   import 李尔
@@ -238,13 +175,9 @@ LIC_EOF
               sys.modules["lear_chat"] = module
               spec.loader.exec_module(module)
               return module
-
-
-          print("[main.py] 正在加载聊天机器人模块...")
+          print("[main.py] Loading chatbot...")
           chatbot = load_chatbot_module()
-          print("[main.py] 模块加载完成")
-
-
+          print("[main.py] Loaded")
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
           from kivy.uix.scrollview import ScrollView
@@ -255,27 +188,17 @@ LIC_EOF
           from kivy.graphics import Color, RoundedRectangle, Rectangle
           from kivy.metrics import dp
           from kivy.clock import Clock
-
           CJK_FONT = "Roboto"
-          for _fp in [
-              "/system/fonts/DroidSansFallback.ttf",
-              "/system/fonts/NotoSansCJK-Regular.ttc",
-              "/system/fonts/NotoSerifCJK-Regular.ttc",
-              "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",
-          ]:
+          for _fp in ["/system/fonts/DroidSansFallback.ttf","/system/fonts/NotoSansCJK-Regular.ttc","/system/fonts/NotoSerifCJK-Regular.ttc","/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
               if os.path.exists(_fp):
                   CJK_FONT = _fp
                   break
-
           Window.clearcolor = (0.95, 0.95, 0.95, 1)
-
           COLOR_USER_BG = (0.29, 0.56, 0.89, 1)
           COLOR_BOT_BG = (1, 1, 1, 1)
           COLOR_USER_FG = (1, 1, 1, 1)
           COLOR_BOT_FG = (0.13, 0.13, 0.13, 1)
           COLOR_TITLE_BG = (0.20, 0.46, 0.79, 1)
-
-
           class ChatBubble(Label):
               def __init__(self, text, is_user=False, **kwargs):
                   super().__init__(**kwargs)
@@ -294,18 +217,13 @@ LIC_EOF
                       Color(*(COLOR_USER_BG if is_user else COLOR_BOT_BG))
                       self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12)])
                   self.bind(pos=self._update_bg, size=self._update_bg)
-
               def _on_texture_size(self, instance, value):
                   self.height = value[1] + dp(20)
-
               def _on_size(self, instance, value):
                   self.text_size = (max(value[0] - dp(28), dp(50)), None)
-
               def _update_bg(self, *args):
                   self._bg.pos = self.pos
                   self._bg.size = self.size
-
-
           class MessageRow(BoxLayout):
               def __init__(self, text, is_user=False, **kwargs):
                   super().__init__(**kwargs)
@@ -323,82 +241,35 @@ LIC_EOF
                       self.add_widget(spacer)
                   bubble.bind(height=lambda inst, val: setattr(self, "height", val + dp(8)))
                   self.height = bubble.height + dp(8)
-
-
           class ChatApp(App):
               def __init__(self, **kwargs):
                   super().__init__(**kwargs)
                   self.session_id = None
-
               def build(self):
                   root = BoxLayout(orientation="vertical")
-                  title = Label(
-                      text="李尔",
-                      font_name=CJK_FONT,
-                      font_size=dp(22),
-                      bold=True,
-                      size_hint=(1, None),
-                      height=dp(54),
-                      color=(1, 1, 1, 1),
-                  )
+                  title = Label(text="李尔", font_name=CJK_FONT, font_size=dp(22), bold=True, size_hint=(1, None), height=dp(54), color=(1, 1, 1, 1))
                   with title.canvas.before:
                       Color(*COLOR_TITLE_BG)
                       title._bg = Rectangle(pos=title.pos, size=title.size)
-                  title.bind(
-                      pos=lambda inst, val: setattr(title._bg, "pos", val),
-                      size=lambda inst, val: setattr(title._bg, "size", val),
-                  )
+                  title.bind(pos=lambda inst, val: setattr(title._bg, "pos", val), size=lambda inst, val: setattr(title._bg, "size", val))
                   root.add_widget(title)
-
                   self.scroll = ScrollView(size_hint=(1, 1))
-                  self.chat_layout = BoxLayout(
-                      orientation="vertical",
-                      size_hint_y=None,
-                      spacing=dp(6),
-                      padding=[dp(10), dp(10), dp(10), dp(10)],
-                  )
+                  self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
                   self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
                   self.scroll.add_widget(self.chat_layout)
                   root.add_widget(self.scroll)
-
-                  input_area = BoxLayout(
-                      orientation="horizontal",
-                      size_hint=(1, None),
-                      height=dp(58),
-                      spacing=dp(8),
-                      padding=[dp(10), dp(6), dp(10), dp(6)],
-                  )
+                  input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(58), spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)])
                   with input_area.canvas.before:
                       Color(1, 1, 1, 1)
                       input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
-                  input_area.bind(
-                      pos=lambda inst, val: setattr(input_area._bg, "pos", val),
-                      size=lambda inst, val: setattr(input_area._bg, "size", val),
-                  )
-                  self.text_input = TextInput(
-                      hint_text="输入消息…",
-                      font_name=CJK_FONT,
-                      font_size=dp(16),
-                      multiline=False,
-                      size_hint=(1, 1),
-                      padding=[dp(10), dp(12), dp(10), dp(10)],
-                  )
+                  input_area.bind(pos=lambda inst, val: setattr(input_area._bg, "pos", val), size=lambda inst, val: setattr(input_area._bg, "size", val))
+                  self.text_input = TextInput(hint_text="输入消息…", font_name=CJK_FONT, font_size=dp(16), multiline=False, size_hint=(1, 1), padding=[dp(10), dp(12), dp(10), dp(10)])
                   self.text_input.bind(on_text_validate=self.send_message)
                   input_area.add_widget(self.text_input)
-                  send_btn = Button(
-                      text="发送",
-                      font_name=CJK_FONT,
-                      font_size=dp(16),
-                      size_hint=(None, 1),
-                      width=dp(82),
-                      color=(1, 1, 1, 1),
-                      background_color=COLOR_TITLE_BG,
-                      background_normal="",
-                  )
+                  send_btn = Button(text="发送", font_name=CJK_FONT, font_size=dp(16), size_hint=(None, 1), width=dp(82), color=(1, 1, 1, 1), background_color=COLOR_TITLE_BG, background_normal="")
                   send_btn.bind(on_release=self.send_message)
                   input_area.add_widget(send_btn)
                   root.add_widget(input_area)
-
                   try:
                       result = chatbot.web_start_session()
                       self.session_id = result.get("session_id")
@@ -407,26 +278,22 @@ LIC_EOF
                   except Exception as e:
                       import traceback
                       traceback.print_exc()
-                      self.add_bot_message(f"【初始化失败】{e}")
+                      self.add_bot_message(f"初始化失败：{e}")
                   return root
-
               def add_bot_message(self, text):
                   text = (text or "").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=False))
                   self._scroll_to_bottom()
-
               def add_user_message(self, text):
                   text = (text or "").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=True))
                   self._scroll_to_bottom()
-
               def _scroll_to_bottom(self):
                   Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.05)
-
               def send_message(self, instance):
                   text = (self.text_input.text or "").strip()
                   if not text:
@@ -441,18 +308,19 @@ LIC_EOF
                   except Exception as e:
                       import traceback
                       traceback.print_exc()
-                      self.add_bot_message(f"【出错啦】{e}")
-
-
+                      self.add_bot_message(f"出错：{e}")
           if __name__ == "__main__":
               ChatApp().run()
-          PYEOF
-          echo "✅ main.py 已生成 ($(wc -l < main.py) 行)"
+          """
+          with open("main.py", "w", encoding="utf-8") as f:
+              f.write(code)
+          print("main.py generated, lines:", code.count(chr(10)))
+          '
 
       - name: Generate buildozer.spec
         run: |
-          cat << 'SPECEOF' > buildozer.spec
-          [app]
+          python3 -c '
+          spec = """[app]
           title = 李尔聊天机器人
           package.name = mychatbot
           package.domain = org.lear
@@ -474,30 +342,30 @@ LIC_EOF
           [buildozer]
           log_level = 2
           warn_on_root = 1
-          SPECEOF
-          echo "✅ buildozer.spec 已生成"
+          """
+          with open("buildozer.spec", "w", encoding="utf-8") as f:
+              f.write(spec)
+          print("buildozer.spec generated")
+          '
 
-      - name: Build APK (verbose)
+      - name: Build APK
         run: |
-          echo "==== 开始构建 APK ===="
+          echo "==== Build APK ===="
           echo "JAVA_HOME=$JAVA_HOME"
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "---- 验证 Java 可用 ----"
           java -version 2>&1
-          echo "---- 验证 SDK 可用 ----"
           ls "$ANDROID_HOME/build-tools/" 2>&1
           ls "$ANDROID_HOME/platforms/" 2>&1
-          
+
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
           EXIT_CODE=${PIPESTATUS[0]}
-          
-          echo "==== 构建结束，退出码：$EXIT_CODE ===="
-          echo "==== bin 目录内容： ===="
-          ls -lh bin/ 2>/dev/null || echo "bin 目录不存在！"
-          
+
+          echo "==== Build exit code: $EXIT_CODE ===="
+          ls -lh bin/ 2>/dev/null || echo "bin/ not found"
+
           if ! ls bin/*.apk 2>/dev/null; then
-            echo "❌ APK 生成失败"
+            echo "APK NOT GENERATED"
             exit 1
           fi
 
@@ -510,7 +378,7 @@ LIC_EOF
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload full build log on failure
+      - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -521,29 +389,24 @@ LIC_EOF
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Print error context on failure
+      - name: Print error context
         if: failure()
         run: |
-          echo "================================================"
-          echo "==== 完整 build.log 最后 200 行 ===="
-          echo "================================================"
-          tail -n 200 build.log 2>/dev/null || echo "无 build.log"
-          
+          echo "==== Last 200 lines of build.log ===="
+          tail -n 200 build.log 2>/dev/null || echo "no build.log"
           echo ""
-          echo "================================================"
-          echo "==== 自动抓取错误上下文（每个错误行前后各 15 行） ===="
-          echo "================================================"
+          echo "==== Error context (15 lines around each match) ===="
           if [ -f build.log ]; then
             grep -n -iE "error|fail|exception|traceback|not found|invalid|cannot|denied|license" build.log | head -30 | while read line; do
               LINE_NUM=$(echo "$line" | cut -d: -f1)
               echo ""
-              echo "========== 错误位置：第 $LINE_NUM 行 =========="
+              echo "=== Error at line $LINE_NUM ==="
               START=$((LINE_NUM - 15))
               END=$((LINE_NUM + 15))
               if [ $START -lt 1 ]; then START=1; fi
               sed -n "${START},${END}p" build.log
-              echo "---------- 上下文结束 ----------"
+              echo "=== end ==="
             done
           else
-            echo "build.log 不存在"
+            echo "build.log missing"
           fi
