@@ -13,6 +13,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Print env info
+        run: |
+          echo "==== 环境信息 ===="
+          uname -a
+          df -h /
+          echo "HOME=$HOME"
+          echo "PWD=$PWD"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -20,22 +28,30 @@ jobs:
 
       - name: Free disk space
         run: |
+          echo "==== 释放磁盘空间 ===="
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
           sudo apt-get clean
           df -h /
 
       - name: Install system deps
         run: |
+          echo "==== 安装系统依赖 ===="
           sudo apt-get update -y
           sudo apt-get install -y zip unzip openjdk-17-jdk python3-pip \
             autoconf automake libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             build-essential ccache git libltdl-dev
+          echo "==== Java 版本 ===="
+          java -version
+          echo "==== JAVA_HOME=$JAVA_HOME ===="
 
       - name: Install buildozer and gdown
         run: |
+          echo "==== 安装 Python 工具 ===="
           python -m pip install --upgrade pip
           pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1"
+          echo "==== buildozer 版本 ===="
+          buildozer version
 
       - name: Cache buildozer
         uses: actions/cache@v4
@@ -44,27 +60,68 @@ jobs:
             ~/.buildozer
             .buildozer
             /home/runner/.local/share/python-for-android
-          key: buildozer-p4a-v3-${{ runner.os }}
+          key: buildozer-p4a-v5-${{ runner.os }}
+
+      - name: Pre-install Android SDK and accept licenses
+        run: |
+          echo "==== 预装 Android SDK + 接受所有 license ===="
+          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          
+          echo "---- 下载 cmdline-tools ----"
+          cd /tmp
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" 2>/dev/null || true
+          
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          echo "---- sdkmanager 路径：----"
+          which sdkmanager
+          
+          echo "---- 接受所有 license ----"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          
+          echo "---- 安装 platform-tools / build-tools / platforms ----"
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          
+          echo "==== SDK 安装完成，目录： ===="
+          ls -la "$ANDROID_HOME/build-tools/" 2>/dev/null || echo "build-tools 目录不存在！"
+          ls -la "$ANDROID_HOME/platforms/" 2>/dev/null || echo "platforms 目录不存在！"
 
       - name: Download chatbot zip from Google Drive
         run: |
+          echo "==== 从 Google Drive 下载机器人 zip ===="
           gdown 'https://drive.google.com/uc?id=1_GJVvaM2wKXFAo6mDaaOIpVBhrjAQ7Uf' -O 机器人.zip
+          echo "==== 下载完成，文件大小： ===="
           ls -lh 机器人.zip
+          
+          echo "==== 解压 ===="
           unzip -o 机器人.zip -d 机器人解压/
-          echo "==== 解压后内容： ===="
-          find 机器人解压/ -type f
+          
+          echo "==== 解压后所有文件： ===="
+          find 机器人解压/ -type f -exec ls -lh {} \;
 
       - name: Extract chatbot files to project root
         run: |
+          echo "==== 查找 李尔.py 所在目录 ===="
           CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
+          
           if [ -z "$CHATBOT_DIR" ]; then
-            echo "❌ 未找到 李尔.py"
+            echo "❌ 未找到 李尔.py，zip 内容如下："
             find 机器人解压/ -type f
             exit 1
           fi
+          
           echo "✅ 机器人目录：$CHATBOT_DIR"
+          ls -la "$CHATBOT_DIR"
+          
+          echo "==== 拷贝所有 .py 和 .json 到根目录 ===="
           cp -v "$CHATBOT_DIR"/*.py .
           cp -v "$CHATBOT_DIR"/*.json .
+          
+          echo "==== 根目录最终内容： ===="
           ls -la
 
       - name: Generate main.py (chat UI)
@@ -305,6 +362,7 @@ jobs:
               ChatApp().run()
           PYEOF
           echo "✅ main.py 已生成 ($(wc -l < main.py) 行)"
+          head -20 main.py
 
       - name: Generate buildozer.spec
         run: |
@@ -323,6 +381,7 @@ jobs:
           android.minapi = 21
           android.api = 34
           android.ndk = 25b
+          android.accept_sdk_license = True
           android.allow_backup = 1
           presplash.duration = 3
 
@@ -331,13 +390,28 @@ jobs:
           warn_on_root = 1
           SPECEOF
           echo "✅ buildozer.spec 已生成"
+          cat buildozer.spec
 
-      - name: Build APK
+      - name: Build APK (verbose)
         run: |
-          buildozer -v android debug
-          ls -lh bin/
+          echo "==== 开始构建 APK ===="
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          buildozer -v android debug 2>&1 | tee build.log
+          
+          echo "==== 构建结束，退出码：${PIPESTATUS[0]} ===="
+          echo "==== bin 目录内容： ===="
+          ls -lh bin/ 2>/dev/null || echo "bin 目录不存在！"
+          
+          # 检查是否真的生成了 APK
+          if ! ls bin/*.apk 2>/dev/null; then
+            echo "❌ APK 生成失败"
+            exit 1
+          fi
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: 李尔聊天机器人-APK
@@ -345,12 +419,25 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload logs on failure
+      - name: Upload full build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: |
+            build.log
             .buildozer/**/*.log
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Debug info on failure
+        if: failure()
+        run: |
+          echo "==== 失败时打印最后 200 行构建日志 ===="
+          tail -n 200 build.log 2>/dev/null || echo "无 build.log"
+          
+          echo "==== .buildozer 目录结构 ===="
+          find .buildozer -maxdepth 4 -type d 2>/dev/null | head -50
+          
+          echo "==== 所有 .log 文件 ===="
+          find . -name "*.log" -exec echo "--- {} ---" \; -exec tail -n 50 {} \; 2>/dev/null
