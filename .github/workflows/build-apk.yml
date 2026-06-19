@@ -143,7 +143,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v13-${{ runner.os }}
+          key: ndk-p4a-v14-${{ runner.os }}
 
       - name: Pre-clone python-for-android master
         run: |
@@ -171,7 +171,7 @@ jobs:
           cp -v "$CHATBOT_DIR"/*.json .
           ls -la
 
-      - name: Rename Chinese filenames to ASCII (极其重要，防止安卓导入报错)
+      - name: Rename Chinese filenames to ASCII
         run: |
           python3 -c '
           import re, os
@@ -191,6 +191,10 @@ jobs:
               "成语.py": "chatbot_idioms.py",
           }
 
+          print("==== Original files ====")
+          for f in sorted(os.listdir(".")):
+              print(f"  {f}")
+
           contents = {}
           for cn, en in RENAME_MODULES.items():
               src = cn + ".py"
@@ -198,27 +202,54 @@ jobs:
                   with open(src, "r", encoding="utf-8") as f:
                       contents[en] = f.read()
                   os.remove(src)
+                  print(f"Renamed file: {src} -> {en}.py")
 
           def replace_all(content):
               for cn_fn, en_fn in FILE_RENAME.items():
                   content = content.replace(cn_fn, en_fn)
               for cn, en in RENAME_MODULES.items():
-                  content = re.sub(r"(?m)^(\s*)import " + cn + r"\s*$", r"\1import " + en + " as " + cn, content)
-                  content = re.sub(r"(?m)^(\s*)import " + cn + r" as ", r"\1import " + en + " as ", content)
-                  content = re.sub(r"(?m)^(\s*)from " + cn + r" import", r"\1from " + en + " import", content)
-                  content = re.sub(r"(\s)import " + cn + r"(\s|$)", r"\1import " + en + " as " + cn + r"\2", content)
-                  content = re.sub(r"(\s)import " + cn + r" as ", r"\1import " + en + " as ", content)
-                  content = re.sub(r"(\s)from " + cn + r" import", r"\1from " + en + " import", content)
+                  content = re.sub(
+                      r"(?m)^(\s*)import " + cn + r"\s*$",
+                      r"\1import " + en + " as " + cn,
+                      content
+                  )
+                  content = re.sub(
+                      r"(?m)^(\s*)import " + cn + r" as ",
+                      r"\1import " + en + " as ",
+                      content
+                  )
+                  content = re.sub(
+                      r"(?m)^(\s*)from " + cn + r" import",
+                      r"\1from " + en + " import",
+                      content
+                  )
+                  content = re.sub(
+                      r"(\s)import " + cn + r"(\s|$)",
+                      r"\1import " + en + " as " + cn + r"\2",
+                      content
+                  )
+                  content = re.sub(
+                      r"(\s)import " + cn + r" as ",
+                      r"\1import " + en + " as ",
+                      content
+                  )
+                  content = re.sub(
+                      r"(\s)from " + cn + r" import",
+                      r"\1from " + en + " import",
+                      content
+                  )
               return content
 
           for en, content in contents.items():
               content = replace_all(content)
               with open(en + ".py", "w", encoding="utf-8") as f:
                   f.write(content)
+              print(f"Processed: {en}.py ({len(content)} chars)")
 
           for cn_fn, en_fn in FILE_RENAME.items():
               if cn_fn.endswith(".json") and os.path.exists(cn_fn):
                   os.rename(cn_fn, en_fn)
+                  print(f"Renamed: {cn_fn} -> {en_fn}")
 
           for fname in os.listdir("."):
               if fname.endswith(".py") and not any(fname == en + ".py" for en in RENAME_MODULES.values()):
@@ -228,9 +259,17 @@ jobs:
                   if new_content != content:
                       with open(fname, "w", encoding="utf-8") as f:
                           f.write(new_content)
+                      print(f"Modified: {fname}")
+
+          print("")
+          print("==== Final files ====")
+          for f in sorted(os.listdir(".")):
+              if f.endswith((".py", ".json")):
+                  size = os.path.getsize(f)
+                  print(f"  {f} ({size} bytes)")
           '
 
-      - name: Generate main.py (原生 Import 版，完美适配 pyc)
+      - name: Generate main.py (改用 import 加载 .pyc)
         run: |
           python3 -c '
           code = """# -*- coding: utf-8 -*-
@@ -244,15 +283,18 @@ jobs:
           chatbot = None
 
           try:
-              print("[main.py] Loading chatbot module...", flush=True)
-              # 直接使用原生 import，Python 会自动寻找并加载打包后的 lear_main.pyc
-              import lear_main
-              chatbot = lear_main
-              print("[main.py] Module loaded", flush=True)
+              print(\"[main.py] Loading chatbot module...\", flush=True)
+              print(\"[main.py] APP_DIR =\", APP_DIR, flush=True)
+              print(\"[main.py] files:\", os.listdir(APP_DIR), flush=True)
+
+              # 直接 import（自动加载 .pyc，不依赖 .py 文件存在）
+              import lear_main as 李尔
+              chatbot = 李尔
+              print(\"[main.py] Module loaded successfully\", flush=True)
+              print(\"[main.py] chatbot has web_start_session:\", hasattr(chatbot, \"web_start_session\"), flush=True)
           except Exception as e:
-              files = os.listdir(APP_DIR)
-              INIT_ERROR = traceback.format_exc() + "\nAPP_DIR 内容: " + str(files)
-              print("[main.py] INIT ERROR:", INIT_ERROR, flush=True)
+              INIT_ERROR = traceback.format_exc()
+              print(\"[main.py] INIT ERROR:\", INIT_ERROR, flush=True)
 
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
@@ -265,8 +307,8 @@ jobs:
           from kivy.metrics import dp
           from kivy.clock import Clock
 
-          CJK_FONT = "Roboto"
-          for _fp in ["/system/fonts/DroidSansFallback.ttf","/system/fonts/NotoSansCJK-Regular.ttc","/system/fonts/NotoSerifCJK-Regular.ttc","/system/fonts/NotoColorEmoji.ttf","/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"]:
+          CJK_FONT = \"Roboto\"
+          for _fp in [\"/system/fonts/DroidSansFallback.ttf\",\"/system/fonts/NotoSansCJK-Regular.ttc\",\"/system/fonts/NotoSerifCJK-Regular.ttc\",\"/system/fonts/NotoColorEmoji.ttf\",\"/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf\"]:
               if os.path.exists(_fp):
                   CJK_FONT = _fp
                   break
@@ -288,8 +330,8 @@ jobs:
                   self.font_name = CJK_FONT
                   self.font_size = dp(13) if is_error else dp(16)
                   self.size_hint_y = None
-                  self.halign = "left"
-                  self.valign = "middle"
+                  self.halign = \"left\"
+                  self.valign = \"middle\"
                   self.padding = (dp(14), dp(10))
                   self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
                   self.bind(texture_size=self._on_texture_size)
@@ -311,7 +353,7 @@ jobs:
           class MessageRow(BoxLayout):
               def __init__(self, text, is_user=False, is_error=False, **kwargs):
                   super().__init__(**kwargs)
-                  self.orientation = "horizontal"
+                  self.orientation = \"horizontal\"
                   self.size_hint_y = None
                   self.spacing = dp(6)
                   self.padding = (dp(8), dp(2))
@@ -323,7 +365,7 @@ jobs:
                   else:
                       self.add_widget(bubble)
                       self.add_widget(spacer)
-                  bubble.bind(height=lambda inst, val: setattr(self, "height", val + dp(8)))
+                  bubble.bind(height=lambda inst, val: setattr(self, \"height\", val + dp(8)))
                   self.height = bubble.height + dp(8)
 
 
@@ -333,63 +375,63 @@ jobs:
                   self.session_id = None
 
               def build(self):
-                  root = BoxLayout(orientation="vertical")
-                  title = Label(text="李尔", font_name=CJK_FONT, font_size=dp(22), bold=True, size_hint=(1, None), height=dp(54), color=(1, 1, 1, 1))
+                  root = BoxLayout(orientation=\"vertical\")
+                  title = Label(text=\"李尔\", font_name=CJK_FONT, font_size=dp(22), bold=True, size_hint=(1, None), height=dp(54), color=(1, 1, 1, 1))
                   with title.canvas.before:
                       Color(*COLOR_TITLE_BG)
                       title._bg = Rectangle(pos=title.pos, size=title.size)
-                  title.bind(pos=lambda inst, val: setattr(title._bg, "pos", val), size=lambda inst, val: setattr(title._bg, "size", val))
+                  title.bind(pos=lambda inst, val: setattr(title._bg, \"pos\", val), size=lambda inst, val: setattr(title._bg, \"size\", val))
                   root.add_widget(title)
 
                   self.scroll = ScrollView(size_hint=(1, 1))
-                  self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
-                  self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
+                  self.chat_layout = BoxLayout(orientation=\"vertical\", size_hint_y=None, spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)])
+                  self.chat_layout.bind(minimum_height=self.chat_layout.setter(\"height\"))
                   self.scroll.add_widget(self.chat_layout)
                   root.add_widget(self.scroll)
 
-                  input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(58), spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)])
+                  input_area = BoxLayout(orientation=\"horizontal\", size_hint=(1, None), height=dp(58), spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)])
                   with input_area.canvas.before:
                       Color(1, 1, 1, 1)
                       input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
-                  input_area.bind(pos=lambda inst, val: setattr(input_area._bg, "pos", val), size=lambda inst, val: setattr(input_area._bg, "size", val))
-                  self.text_input = TextInput(hint_text="输入消息…", font_name=CJK_FONT, font_size=dp(16), multiline=False, size_hint=(1, 1), padding=[dp(10), dp(12), dp(10), dp(10)])
+                  input_area.bind(pos=lambda inst, val: setattr(input_area._bg, \"pos\", val), size=lambda inst, val: setattr(input_area._bg, \"size\", val))
+                  self.text_input = TextInput(hint_text=\"输入消息…\", font_name=CJK_FONT, font_size=dp(16), multiline=False, size_hint=(1, 1), padding=[dp(10), dp(12), dp(10), dp(10)])
                   self.text_input.bind(on_text_validate=self.send_message)
                   input_area.add_widget(self.text_input)
-                  send_btn = Button(text="发送", font_name=CJK_FONT, font_size=dp(16), size_hint=(None, 1), width=dp(82), color=(1, 1, 1, 1), background_color=COLOR_TITLE_BG, background_normal="")
+                  send_btn = Button(text=\"发送\", font_name=CJK_FONT, font_size=dp(16), size_hint=(None, 1), width=dp(82), color=(1, 1, 1, 1), background_color=COLOR_TITLE_BG, background_normal=\"\")
                   send_btn.bind(on_release=self.send_message)
                   input_area.add_widget(send_btn)
                   root.add_widget(input_area)
 
                   if INIT_ERROR:
-                      self.chat_layout.add_widget(MessageRow("【初始化错误】", is_user=False, is_error=True))
-                      # 使用 splitlines 防止转义字符问题
-                      for line in INIT_ERROR.splitlines():
+                      self.chat_layout.add_widget(MessageRow(\"【初始化错误】\", is_user=False, is_error=True))
+                      err_lines = INIT_ERROR.split(\"\\n\")
+                      for line in err_lines:
                           if line.strip():
                               self.chat_layout.add_widget(MessageRow(line, is_user=False, is_error=True))
                       return root
 
                   try:
                       result = chatbot.web_start_session()
-                      self.session_id = result.get("session_id")
-                      for msg in result.get("messages", []):
+                      self.session_id = result.get(\"session_id\")
+                      for msg in result.get(\"messages\", []):
                           self.add_bot_message(msg)
                   except Exception as e:
                       err = traceback.format_exc()
-                      self.chat_layout.add_widget(MessageRow("【会话初始化失败】", is_user=False, is_error=True))
-                      for line in err.splitlines():
+                      self.chat_layout.add_widget(MessageRow(\"【会话初始化失败】\", is_user=False, is_error=True))
+                      for line in err.split(\"\\n\"):
                           if line.strip():
                               self.chat_layout.add_widget(MessageRow(line, is_user=False, is_error=True))
                   return root
 
               def add_bot_message(self, text):
-                  text = (text or "").strip()
+                  text = (text or \"\").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=False))
                   self._scroll_to_bottom()
 
               def add_user_message(self, text):
-                  text = (text or "").strip()
+                  text = (text or \"\").strip()
                   if not text:
                       return
                   self.chat_layout.add_widget(MessageRow(text, is_user=True))
@@ -400,34 +442,34 @@ jobs:
                   self._scroll_to_bottom()
 
               def _scroll_to_bottom(self):
-                  Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.05)
+                  Clock.schedule_once(lambda dt: setattr(self.scroll, \"scroll_y\", 0), 0.05)
 
               def send_message(self, instance):
                   if INIT_ERROR:
                       return
-                  text = (self.text_input.text or "").strip()
+                  text = (self.text_input.text or \"\").strip()
                   if not text:
                       return
                   self.add_user_message(text)
-                  self.text_input.text = ""
+                  self.text_input.text = \"\"
                   try:
                       result = chatbot.web_process_message(text, self.session_id)
-                      self.session_id = result.get("session_id")
-                      for reply in result.get("replies", []):
+                      self.session_id = result.get(\"session_id\")
+                      for reply in result.get(\"replies\", []):
                           self.add_bot_message(reply)
                   except Exception as e:
                       err = traceback.format_exc()
-                      self.add_error_message("【发送消息出错】")
-                      for line in err.splitlines():
+                      self.add_error_message(\"【发送消息出错】\")
+                      for line in err.split(\"\\n\"):
                           if line.strip():
                               self.add_error_message(line)
 
-          if __name__ == "__main__":
+          if __name__ == \"__main__\":
               ChatApp().run()
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Optimized Import Version)")
+          print("main.py generated (import-based version)")
           '
 
       - name: Generate buildozer.spec
@@ -452,6 +494,7 @@ jobs:
           presplash.duration = 3
           p4a.branch = master
           p4a.source_dir = /home/runner/work/python-for-android
+          no-compile-pyo = False
 
           [buildozer]
           log_level = 2
@@ -469,7 +512,7 @@ jobs:
           java -version 2>&1
           ls "$ANDROID_HOME/build-tools/" 2>&1
           ls "$ANDROID_HOME/platforms/" 2>&1
-          echo "---- File sizes (check for huge json) ----"
+          echo "---- Files to package ----"
           ls -lh *.py *.json 2>&1
 
           set -o pipefail
