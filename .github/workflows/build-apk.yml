@@ -171,7 +171,7 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
           
-      - name: Generate main.py (Bulletproof UI Version)
+      - name: Generate main.py (Ultimate Crash-Free Version)
         run: |
           python3 -c '
           code = r"""# -*- coding: utf-8 -*-
@@ -205,21 +205,20 @@ jobs:
           from kivy.uix.slider import Slider
           from kivy.properties import NumericProperty
 
-          # 坚如磐石的原生窗口推挤模式，杜绝一切启动闪退与按不出键盘
           Window.softinput_mode = "pan"
           
-          # 标准化通用色彩体系
-          COLOR_BG = (0.95, 0.95, 0.95, 1)          
-          COLOR_TITLE_BG = (0.96, 0.96, 0.96, 1)             
-          COLOR_TITLE_FG = (0.1, 0.1, 0.1, 1)    
+          COLOR_BG = (0.94, 0.94, 0.96, 1)
+          COLOR_TITLE_BG = (1, 1, 1, 1)
+          COLOR_TITLE_FG = (0.05, 0.05, 0.05, 1)
           COLOR_TITLE_BORDER = (0.88, 0.88, 0.88, 1)
-          COLOR_ACCENT = (0.0, 0.48, 1.0, 1)        
+          COLOR_ACCENT = (0.0, 0.48, 1.0, 1)
           
           COLOR_USER_BG = (0.0, 0.48, 1.0, 1)
           COLOR_USER_FG = (1, 1, 1, 1)
-          COLOR_BOT_BG = (1, 1, 1, 1)               
+          COLOR_BOT_BG = (1, 1, 1, 1)
           COLOR_BOT_FG = (0.1, 0.1, 0.1, 1)
-          COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)     
+          COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)
+          COLOR_INPUT_BG = (0.93, 0.93, 0.95, 1)
 
           Window.clearcolor = COLOR_BG
 
@@ -234,7 +233,7 @@ jobs:
               return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
 
           class ModernButton(ButtonBehavior, Label):
-              def __init__(self, bg_color=COLOR_ACCENT, corner_radius=6, **kwargs):
+              def __init__(self, bg_color=COLOR_ACCENT, corner_radius=8, **kwargs):
                   super().__init__(**kwargs)
                   self.bg_color = bg_color
                   self.corner_radius = corner_radius
@@ -269,7 +268,7 @@ jobs:
                   self.color = COLOR_TITLE_FG
                   with self.canvas.before:
                       self._render_color = Color(0, 0, 0, 0)
-                      self._bg = RoundedRectangle(radius=[dp(6)])
+                      self._bg = RoundedRectangle(radius=[dp(8)])
                   self.bind(pos=self._update_bg, size=self._update_bg)
                   
               def _update_bg(self, *args):
@@ -285,14 +284,15 @@ jobs:
           class RoundedInput(TextInput):
               def __init__(self, **kwargs):
                   super().__init__(**kwargs)
-                  # 强制锁定纯黑字体，绝对防止不可见文字
-                  self.foreground_color = (0.1, 0.1, 0.1, 1)
                   self.background_color = (0,0,0,0)
                   self.background_normal = ""
                   self.background_active = ""
                   self.cursor_color = COLOR_ACCENT
+                  self.foreground_color = (0.1, 0.1, 0.1, 1)
+                  self.hint_text_color = (0.5, 0.5, 0.5, 1)
+                  self.selection_color = (0.0, 0.48, 1.0, 0.2)
                   with self.canvas.before:
-                      self._render_color = Color(1, 1, 1, 1)
+                      self._render_color = Color(*COLOR_INPUT_BG)
                       self._bg = RoundedRectangle(radius=[dp(18)])
                   self.bind(pos=self._update_bg, size=self._update_bg)
                   
@@ -357,7 +357,6 @@ jobs:
               def on_release(self):
                   self.app_ref.load_session(self.record)
 
-          # 标准化微信式气泡设计
           class ChatBubble(Label):
               def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
                   super().__init__(**kwargs)
@@ -376,9 +375,9 @@ jobs:
                   with self.canvas.before:
                       Color(*bg)
                       if is_user:
-                          rad = [dp(16), dp(4), dp(16), dp(16)]
+                          rad = [dp(18), dp(18), dp(4), dp(18)]
                       else:
-                          rad = [dp(4), dp(16), dp(16), dp(16)]
+                          rad = [dp(18), dp(18), dp(18), dp(4)]
                       self._bg = RoundedRectangle(radius=rad)
                   
                   self.bind(pos=self._update_bg, size=self._update_bg)
@@ -389,12 +388,13 @@ jobs:
                   self.texture_update()
                   
                   max_w = Window.width * 0.72
+                  
                   if self.texture_size[0] > max_w:
                       self.text_size = (max_w, None)
                       self.texture_update()
                   
                   self.text_size = (self.texture_size[0], self.texture_size[1])
-                  self.size = (self.texture_size[0] + dp(32), self.texture_size[1] + dp(24))
+                  self.size = (self.texture_size[0] + dp(28), self.texture_size[1] + dp(20))
                   
               def _update_bg(self, *args):
                   self._bg.pos = self.pos
@@ -410,11 +410,14 @@ jobs:
                   
                   self.bubble = ChatBubble(text, is_user=is_user, is_error=is_error, font_size=font_size)
                   spacer = BoxLayout(size_hint_x=1)
+                  avatar_spacer = BoxLayout(size_hint_x=None, width=dp(5))
                   
                   if is_user:
                       self.add_widget(spacer)
                       self.add_widget(self.bubble)
+                      self.add_widget(avatar_spacer)
                   else:
+                      self.add_widget(avatar_spacer)
                       self.add_widget(self.bubble)
                       self.add_widget(spacer)
                       
@@ -422,6 +425,7 @@ jobs:
                   
               def _update_height(self, inst, val):
                   self.height = val + dp(8)
+
 
           class ChatApp(App):
               chat_font_size = NumericProperty(14)
@@ -463,8 +467,8 @@ jobs:
 
                   main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
                   
-                  # ---- 导航栏 (极简通用) ----
-                  title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52))
+                  # ---- 导航栏 ----
+                  title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(48))
                   with title_bar.canvas.before:
                       Color(*COLOR_TITLE_BG)
                       title_bar._bg = Rectangle(pos=title_bar.pos, size=title_bar.size)
@@ -477,16 +481,19 @@ jobs:
                       title_bar._line.size = (title_bar.width, dp(1))
                   title_bar.bind(pos=update_title_bg, size=update_title_bg)
                   
-                  left_box = BoxLayout(size_hint=(None, 1), width=dp(56), padding=[dp(6), dp(0)])
-                  # 【终极 Hack】：用汉字"三"伪装汉堡菜单，纯ASCII的"+"当新建，彻底绝杀方框乱码！
-                  menu_btn = TopBarButton(text="三", font_name=CJK_FONT, font_size=dp(26), size_hint=(1, 1))
+                  left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
+                  menu_btn = TopBarButton(text="\u2630", font_name=CJK_FONT, font_size=dp(22), size_hint=(None, 1), width=dp(50))
                   menu_btn.bind(on_release=self.open_drawer)
+                  font_btn = TopBarButton(text="字体", font_name=CJK_FONT, font_size=dp(15), size_hint=(None, 1), width=dp(50))
+                  font_btn.bind(on_release=self.show_font_settings)
                   left_box.add_widget(menu_btn)
+                  left_box.add_widget(font_btn)
                   
-                  self.title_lbl = Label(text="李尔", font_name=CJK_FONT, font_size=dp(17), bold=True, color=COLOR_TITLE_FG)
+                  self.title_lbl = Label(text="李尔 (核心加载中)", font_name=CJK_FONT, font_size=dp(16), bold=True, color=COLOR_TITLE_FG)
                   
-                  right_box = BoxLayout(size_hint=(None, 1), width=dp(56), padding=[dp(0), dp(0), dp(6), dp(0)])
-                  new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(28), size_hint=(1, 1))
+                  right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
+                  right_box.add_widget(Label(size_hint=(1, 1)))
+                  new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(24), size_hint=(None, 1), width=dp(50))
                   new_btn.bind(on_release=lambda x: self.start_new_session())
                   right_box.add_widget(new_btn)
                   
@@ -495,30 +502,28 @@ jobs:
                   title_bar.add_widget(right_box)
                   main_layout.add_widget(title_bar)
 
-                  # ---- 核心修复 1：安全的置顶排版算法与支持抓取的滚动条 ----
+                  # ---- 聊天显示区 ----
                   self.scroll = ScrollView(
-                      size_hint=(1, 1), 
-                      scroll_type=['bars', 'content'], 
-                      bar_width=dp(6),
-                      bar_color=(0.4, 0.4, 0.4, 0.6)
+                      size_hint=(1, 1),
+                      scroll_type=["bars", "content"],
+                      bar_width=dp(8),
+                      bar_color=(0.4, 0.4, 0.4, 0.5),
+                      bar_inactive_color=(0.6, 0.6, 0.6, 0.15),
                   )
-                  
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
                   
-                  # 绝妙算法：让容器高度永远至少和屏幕一样大，这会让组件天然被顶到最高处！
-                  def update_layout_height(*args):
+                  def update_chat_height(*args):
                       self.chat_layout.height = max(self.chat_layout.minimum_height, self.scroll.height)
-                  
-                  self.chat_layout.bind(minimum_height=update_layout_height)
-                  self.scroll.bind(height=update_layout_height)
+                  self.chat_layout.bind(minimum_height=update_chat_height)
+                  self.scroll.bind(height=update_chat_height)
                   
                   self.scroll.add_widget(self.chat_layout)
                   main_layout.add_widget(self.scroll)
 
-                  # ---- 核心修复 2：输入区 (单行模式防止文字滚出视野隐匿，回车直接发送) ----
-                  input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(56), spacing=dp(10), padding=[dp(12), dp(8), dp(12), dp(8)])
+                  # ---- 输入区 ----
+                  input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(60), spacing=dp(10), padding=[dp(12), dp(10), dp(12), dp(10)])
                   with input_area.canvas.before:
-                      Color(0.96, 0.96, 0.96, 1)
+                      Color(*COLOR_TITLE_BG)
                       input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
                       Color(*COLOR_TITLE_BORDER)
                       input_area._line = Rectangle(pos=(input_area.x, input_area.top-1), size=(input_area.width, dp(1)))
@@ -529,12 +534,10 @@ jobs:
                       input_area._line.size = (input_area.width, dp(1))
                   input_area.bind(pos=update_input_bg, size=update_input_bg)
                   
-                  # multiline=False 彻底解决打字看不见的问题！同时也支持手机键盘直接点发送！
-                  self.text_input = RoundedInput(hint_text="输入消息...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=False, size_hint=(1, 1), padding=[dp(16), dp(10)])
-                  self.text_input.bind(on_text_validate=self.send_message)
+                  self.text_input = RoundedInput(hint_text="系统初始化中请稍等...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
                   input_area.add_widget(self.text_input)
                   
-                  self.send_btn = ModernButton(text="等待中", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
+                  self.send_btn = ModernButton(text="请等待", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
                   self.send_btn.set_disabled(True)
                   self.send_btn.bind(on_release=self.send_message)
                   input_area.add_widget(self.send_btn)
@@ -554,7 +557,7 @@ jobs:
                       self.drawer._bg = Rectangle(pos=self.drawer.pos, size=self.drawer.size)
                   self.drawer.bind(pos=lambda inst, val: setattr(self.drawer._bg, "pos", val), size=lambda inst, val: setattr(self.drawer._bg, "size", val))
 
-                  drawer_title = Label(text="最近对话", font_name=CJK_FONT, font_size=dp(18), bold=True, color=COLOR_TITLE_FG, size_hint=(1, None), height=dp(52))
+                  drawer_title = Label(text="最近对话", font_name=CJK_FONT, font_size=dp(18), bold=True, color=COLOR_TITLE_FG, size_hint=(1, None), height=dp(50))
                   with drawer_title.canvas.before:
                       Color(*COLOR_TITLE_BG)
                       drawer_title._bg = Rectangle(pos=drawer_title.pos, size=drawer_title.size)
@@ -568,20 +571,15 @@ jobs:
                   drawer_title.bind(pos=update_dt_bg, size=update_dt_bg)
                   self.drawer.add_widget(drawer_title)
 
-                  drawer_scroll = ScrollView(size_hint=(1, 1), scroll_type=['bars', 'content'], bar_width=dp(4))
+                  drawer_scroll = ScrollView(size_hint=(1, 1))
                   self.sidebar_layout = BoxLayout(orientation="vertical", size_hint_y=None)
                   self.sidebar_layout.bind(minimum_height=self.sidebar_layout.setter("height"))
                   drawer_scroll.add_widget(self.sidebar_layout)
                   self.drawer.add_widget(drawer_scroll)
 
-                  btn_box = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(50))
-                  font_btn = ModernButton(text="A±", font_name=CJK_FONT, font_size=dp(16), corner_radius=0, bg_color=(0.5, 0.5, 0.5, 1))
-                  font_btn.bind(on_release=self.show_font_settings)
-                  clear_btn = ModernButton(text="清空记录", font_name=CJK_FONT, font_size=dp(15), corner_radius=0, bg_color=COLOR_ERROR_BG)
+                  clear_btn = ModernButton(text="清空所有记录", font_name=CJK_FONT, font_size=dp(15), size_hint=(1, None), height=dp(50), corner_radius=0, bg_color=COLOR_ERROR_BG)
                   clear_btn.bind(on_release=self.show_clear_all_dialog)
-                  btn_box.add_widget(font_btn)
-                  btn_box.add_widget(clear_btn)
-                  self.drawer.add_widget(btn_box)
+                  self.drawer.add_widget(clear_btn)
 
                   self.root.add_widget(self.drawer)
                   self.refresh_sidebar()
@@ -603,6 +601,8 @@ jobs:
               @mainthread
               def _on_backend_ready(self, initial_result):
                   self.is_ready = True
+                  self.title_lbl.text = "李尔"
+                  self.text_input.hint_text = "输入消息..."
                   self.send_btn.text = "发送"
                   self.send_btn.set_disabled(False)
                   
@@ -610,20 +610,20 @@ jobs:
                       self.current_record["id"] = self.session_id
                   msgs = initial_result.get("messages", [])
                   if msgs:
-                      # 触发分句渲染！
                       self._on_message_success(msgs, is_initial=True)
 
               @mainthread
               def _on_backend_error(self, err):
+                  self.title_lbl.text = "李尔 (组件故障)"
                   self.chat_layout.add_widget(MessageRow("引擎预热失败，请重试。\n" + str(err), is_user=False, is_error=True))
 
               def show_font_settings(self, *args):
                   content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
-                  lbl = Label(text=f"当前字号: {int(self.chat_font_size)}", font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
+                  lbl = Label(text="当前字号: " + str(int(self.chat_font_size)), font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
                   slider = Slider(min=10, max=24, step=1, value=self.chat_font_size)
                   def on_slider_val(inst, val):
                       self.chat_font_size = val
-                      lbl.text = f"当前字号: {int(val)}"
+                      lbl.text = "当前字号: " + str(int(val))
                   slider.bind(value=on_slider_val)
                   btn_box = BoxLayout(size_hint_y=None, height=dp(40))
                   btn_close = ModernButton(text="完成", font_name=CJK_FONT, bg_color=COLOR_ACCENT)
@@ -772,7 +772,10 @@ jobs:
               def _scroll_to_bottom(self):
                   Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
 
-              def send_message(self, *args):
+              def _scroll_to_top(self):
+                  Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 1), 0.1)
+
+              def send_message(self, instance):
                   if not self.is_ready or self.is_processing: return
                   text = strip_emojis((self.text_input.text or "").strip())
                   if not text: return
@@ -790,9 +793,8 @@ jobs:
                   self.refresh_sidebar()
 
                   self.text_input.text = ""
-                  self.text_input.focus = False
                   self.is_processing = True
-                  self.send_btn.text = "思考中"
+                  self.send_btn.text = "发送中"
                   self.send_btn.set_disabled(True)
                   
                   threading.Thread(target=self._process_message_thread, args=(text,), daemon=True).start()
@@ -816,22 +818,31 @@ jobs:
                   self.send_btn.text = "发送"
                   self.send_btn.set_disabled(False)
                   
-                  # ---- 核心修复 4：分句切割逻辑！ ----
-                  # 识别多行与独立段落，直接拆分为多个独立的连贯气泡
+                  if isinstance(replies, str):
+                      replies = [r.strip() for r in replies.split("\n") if r.strip()]
+                  elif isinstance(replies, list):
+                      new_replies = []
+                      for r in replies:
+                          if isinstance(r, str):
+                              for sub in r.split("\n"):
+                                  sub = sub.strip()
+                                  if sub:
+                                      new_replies.append(sub)
+                          elif r and str(r).strip():
+                              new_replies.append(str(r).strip())
+                      replies = new_replies
+                  
                   for reply in replies:
                       clean_reply = strip_emojis(reply)
-                      clean_reply = clean_reply.replace("\\n", "\n")
                       if not clean_reply.strip(): continue
-                      
-                      parts = [p.strip() for p in clean_reply.split('\n') if p.strip()]
-                      for part in parts:
-                          self.chat_layout.add_widget(MessageRow(part, is_user=False, font_size=self.chat_font_size))
-                          if not is_initial:
-                              self.current_record["messages"].append({"is_user": False, "text": part})
+                      self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
+                      self.current_record["messages"].append({"is_user": False, "text": clean_reply})
                   
-                  self._scroll_to_bottom()
-                  if not is_initial:
-                      self.save_all_history()
+                  if is_initial:
+                      self._scroll_to_top()
+                  else:
+                      self._scroll_to_bottom()
+                  self.save_all_history()
 
               @mainthread
               def _on_message_error(self, err):
@@ -846,7 +857,7 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Extreme Bulletproof UI Version)")
+          print("main.py generated (Extreme Perf Tuned)")
           '
 
       - name: Generate buildozer.spec
@@ -858,7 +869,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.11
+          version = 1.0.9
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
