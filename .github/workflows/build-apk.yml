@@ -102,9 +102,9 @@ jobs:
           echo "==== SDK installed ===="
           ls -la $ANDROID_HOME/
 
-      - name: Patch legacy sdkmanager to use Java 17 compatible cmdline-tools
+      - name: Patch legacy sdkmanager
         run: |
-          echo "==== 让 buildozer 调用旧版 sdkmanager 时转用新版 ===="
+          echo "==== Patch sdkmanager to use Java 17 compatible cmdline-tools ===="
           BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
           mkdir -p "$(dirname "$BUILD_DIR")"
           if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then
@@ -113,8 +113,6 @@ jobs:
           ln -s "$ANDROID_HOME" "$BUILD_DIR"
 
           LEGACY_SDKMANAGER="$ANDROID_HOME/tools/bin/sdkmanager"
-
-          echo "---- 替换 $LEGACY_SDKMANAGER 为包装脚本 ----"
           cat > /tmp/sdkmanager_wrapper.sh << 'WRAPPER'
           #!/bin/bash
           REAL_SDKMANAGER="$(dirname "$(dirname "$(dirname "$0")")")/cmdline-tools/latest/bin/sdkmanager"
@@ -129,7 +127,6 @@ jobs:
           cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER" 2>/dev/null || sudo cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER"
           chmod +x "$LEGACY_SDKMANAGER"
 
-          echo "---- 同样包装 avdmanager ----"
           LEGACY_AVDMANAGER="$ANDROID_HOME/tools/bin/avdmanager"
           cat > /tmp/avdmanager_wrapper.sh << 'WRAPPER2'
           #!/bin/bash
@@ -145,12 +142,8 @@ jobs:
           cp /tmp/avdmanager_wrapper.sh "$LEGACY_AVDMANAGER" 2>/dev/null || sudo cp /tmp/avdmanager_wrapper.sh "$LEGACY_AVDMANAGER"
           chmod +x "$LEGACY_AVDMANAGER"
 
-          echo "==== 验证包装脚本 ===="
-          head -5 "$LEGACY_SDKMANAGER"
-          echo "---- 测试调用 ----"
+          echo "==== 验证 ===="
           "$LEGACY_SDKMANAGER" --version 2>&1
-          echo ""
-          ls -la "$BUILD_DIR/tools/bin/" | head -20
 
       - name: Cache NDK and p4a
         uses: actions/cache@v4
@@ -159,7 +152,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v10-${{ runner.os }}
+          key: ndk-p4a-v11-${{ runner.os }}
 
       - name: Download chatbot zip
         run: |
@@ -366,7 +359,8 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           presplash.duration = 3
-          p4a.branch = stable
+          p4a.branch = master
+          p4a.source_dir = /home/runner/work/python-for-android
 
           [buildozer]
           log_level = 2
@@ -377,6 +371,18 @@ jobs:
           print("buildozer.spec generated")
           '
 
+      - name: Pre-clone python-for-android master
+        run: |
+          echo "==== Pre-clone p4a master branch (with AAB support) ===="
+          git clone --depth=1 -b master https://github.com/kivy/python-for-android.git /home/runner/work/python-for-android
+          echo "==== Verify p4a has aab support ===="
+          cd /home/runner/work/python-for-android
+          git log --oneline -1
+          echo "---- Check aab in toolchain.py ----"
+          grep -E "aab|aab_" pythonforandroid/toolchain.py | head -5 || echo "no aab found"
+          echo "---- Check p4a version ----"
+          cat pythonforandroid/__init__.py | head -10
+
       - name: Build APK
         run: |
           echo "==== Build APK ===="
@@ -386,6 +392,8 @@ jobs:
           ls "$ANDROID_HOME/platforms/" 2>&1
           echo "---- Test patched sdkmanager ----"
           "$ANDROID_HOME/tools/bin/sdkmanager" --version 2>&1
+          echo "---- p4a location ----"
+          ls /home/runner/work/python-for-android/ | head -5
 
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
