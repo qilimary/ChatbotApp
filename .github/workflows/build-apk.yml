@@ -171,7 +171,7 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
           
-      - name: Generate main.py (Ultimate Standard UI Version)
+      - name: Generate main.py (Bulletproof UI Version)
         run: |
           python3 -c '
           code = r"""# -*- coding: utf-8 -*-
@@ -190,7 +190,6 @@ jobs:
 
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
-          from kivy.uix.anchorlayout import AnchorLayout
           from kivy.uix.floatlayout import FloatLayout
           from kivy.uix.scrollview import ScrollView
           from kivy.uix.label import Label
@@ -206,8 +205,8 @@ jobs:
           from kivy.uix.slider import Slider
           from kivy.properties import NumericProperty
 
-          # 修复打字键盘遮挡的终极模式：把界面平滑顶起！
-          Window.softinput_mode = "below_target"
+          # 坚如磐石的原生窗口推挤模式，杜绝一切启动闪退与按不出键盘
+          Window.softinput_mode = "pan"
           
           # 标准化通用色彩体系
           COLOR_BG = (0.95, 0.95, 0.95, 1)          
@@ -285,8 +284,9 @@ jobs:
 
           class RoundedInput(TextInput):
               def __init__(self, **kwargs):
-                  kwargs.setdefault('foreground_color', (0.1, 0.1, 0.1, 1)) # 彻底修复看不见字：强制黑色！
                   super().__init__(**kwargs)
+                  # 强制锁定纯黑字体，绝对防止不可见文字
+                  self.foreground_color = (0.1, 0.1, 0.1, 1)
                   self.background_color = (0,0,0,0)
                   self.background_normal = ""
                   self.background_active = ""
@@ -375,7 +375,6 @@ jobs:
                   bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
                   with self.canvas.before:
                       Color(*bg)
-                      # 标准尖角：用户右侧上尖角，机器人左侧上尖角
                       if is_user:
                           rad = [dp(16), dp(4), dp(16), dp(16)]
                       else:
@@ -479,14 +478,15 @@ jobs:
                   title_bar.bind(pos=update_title_bg, size=update_title_bg)
                   
                   left_box = BoxLayout(size_hint=(None, 1), width=dp(56), padding=[dp(6), dp(0)])
-                  menu_btn = TopBarButton(text="≡", font_name=CJK_FONT, font_size=dp(28), size_hint=(1, 1))
+                  # 【终极 Hack】：用汉字"三"伪装汉堡菜单，纯ASCII的"+"当新建，彻底绝杀方框乱码！
+                  menu_btn = TopBarButton(text="三", font_name=CJK_FONT, font_size=dp(26), size_hint=(1, 1))
                   menu_btn.bind(on_release=self.open_drawer)
                   left_box.add_widget(menu_btn)
                   
                   self.title_lbl = Label(text="李尔", font_name=CJK_FONT, font_size=dp(17), bold=True, color=COLOR_TITLE_FG)
                   
                   right_box = BoxLayout(size_hint=(None, 1), width=dp(56), padding=[dp(0), dp(0), dp(6), dp(0)])
-                  new_btn = TopBarButton(text="＋", font_name=CJK_FONT, font_size=dp(24), size_hint=(1, 1))
+                  new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(28), size_hint=(1, 1))
                   new_btn.bind(on_release=lambda x: self.start_new_session())
                   right_box.add_widget(new_btn)
                   
@@ -495,32 +495,27 @@ jobs:
                   title_bar.add_widget(right_box)
                   main_layout.add_widget(title_bar)
 
-                  # ---- 核心修复 1：聊天显示区顶部对齐 + 可抓取滚动条 ----
+                  # ---- 核心修复 1：安全的置顶排版算法与支持抓取的滚动条 ----
                   self.scroll = ScrollView(
                       size_hint=(1, 1), 
                       scroll_type=['bars', 'content'], 
                       bar_width=dp(6),
-                      bar_color=(0.4, 0.4, 0.4, 0.6),
-                      bar_inactive_color=(0.4, 0.4, 0.4, 0.2),
-                      smooth_scroll_end=10
+                      bar_color=(0.4, 0.4, 0.4, 0.6)
                   )
                   
-                  # 引入 AnchorLayout 强制让消息无论多少都稳稳从最上方开始排列
-                  self.chat_container = AnchorLayout(anchor_y='top', size_hint_y=None)
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
-                  self.chat_layout.bind(minimum_height=self.chat_layout.setter('height'))
                   
-                  self.chat_container.add_widget(self.chat_layout)
-                  self.scroll.add_widget(self.chat_container)
+                  # 绝妙算法：让容器高度永远至少和屏幕一样大，这会让组件天然被顶到最高处！
+                  def update_layout_height(*args):
+                      self.chat_layout.height = max(self.chat_layout.minimum_height, self.scroll.height)
                   
-                  def update_container_height(*args):
-                      self.chat_container.height = max(self.chat_layout.height, self.scroll.height)
-                  self.scroll.bind(height=update_container_height)
-                  self.chat_layout.bind(height=update_container_height)
+                  self.chat_layout.bind(minimum_height=update_layout_height)
+                  self.scroll.bind(height=update_layout_height)
                   
+                  self.scroll.add_widget(self.chat_layout)
                   main_layout.add_widget(self.scroll)
 
-                  # ---- 核心修复 2：输入区 (单行模式防止文字隐匿，回车直接发送) ----
+                  # ---- 核心修复 2：输入区 (单行模式防止文字滚出视野隐匿，回车直接发送) ----
                   input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(56), spacing=dp(10), padding=[dp(12), dp(8), dp(12), dp(8)])
                   with input_area.canvas.before:
                       Color(0.96, 0.96, 0.96, 1)
@@ -534,7 +529,7 @@ jobs:
                       input_area._line.size = (input_area.width, dp(1))
                   input_area.bind(pos=update_input_bg, size=update_input_bg)
                   
-                  # multiline=False 彻底解决打字滚出视野外变空白的问题！同时也支持键盘直接发送！
+                  # multiline=False 彻底解决打字看不见的问题！同时也支持手机键盘直接点发送！
                   self.text_input = RoundedInput(hint_text="输入消息...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=False, size_hint=(1, 1), padding=[dp(16), dp(10)])
                   self.text_input.bind(on_text_validate=self.send_message)
                   input_area.add_widget(self.text_input)
@@ -573,7 +568,7 @@ jobs:
                   drawer_title.bind(pos=update_dt_bg, size=update_dt_bg)
                   self.drawer.add_widget(drawer_title)
 
-                  drawer_scroll = ScrollView(size_hint=(1, 1))
+                  drawer_scroll = ScrollView(size_hint=(1, 1), scroll_type=['bars', 'content'], bar_width=dp(4))
                   self.sidebar_layout = BoxLayout(orientation="vertical", size_hint_y=None)
                   self.sidebar_layout.bind(minimum_height=self.sidebar_layout.setter("height"))
                   drawer_scroll.add_widget(self.sidebar_layout)
@@ -615,7 +610,7 @@ jobs:
                       self.current_record["id"] = self.session_id
                   msgs = initial_result.get("messages", [])
                   if msgs:
-                      # 利用新的分句逻辑渲染初始消息
+                      # 触发分句渲染！
                       self._on_message_success(msgs, is_initial=True)
 
               @mainthread
@@ -821,19 +816,16 @@ jobs:
                   self.send_btn.text = "发送"
                   self.send_btn.set_disabled(False)
                   
-                  # 核心修复 4：分句逻辑！
-                  # 将含有 \n 或者原始列表传过来的多个回复，彻底切分成独立且连贯的多个气泡，完美复现原代码机制！
+                  # ---- 核心修复 4：分句切割逻辑！ ----
+                  # 识别多行与独立段落，直接拆分为多个独立的连贯气泡
                   for reply in replies:
                       clean_reply = strip_emojis(reply)
-                      # 替换底层可能带过来的显式换行符
                       clean_reply = clean_reply.replace("\\n", "\n")
                       if not clean_reply.strip(): continue
                       
-                      # 依据换行符对回答进行“拆分独立气泡”
                       parts = [p.strip() for p in clean_reply.split('\n') if p.strip()]
                       for part in parts:
                           self.chat_layout.add_widget(MessageRow(part, is_user=False, font_size=self.chat_font_size))
-                          # 只有真正的实时聊天才存入当次历史，开局打招呼不作为独立记录存入数组
                           if not is_initial:
                               self.current_record["messages"].append({"is_user": False, "text": part})
                   
@@ -854,7 +846,7 @@ jobs:
           """
           with open("main.py", "w", encoding="utf-8") as f:
               f.write(code)
-          print("main.py generated (Extreme Standard UI Version)")
+          print("main.py generated (Extreme Bulletproof UI Version)")
           '
 
       - name: Generate buildozer.spec
@@ -866,7 +858,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.10
+          version = 1.0.11
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
@@ -877,7 +869,6 @@ jobs:
           android.accept_sdk_license = True
           android.allow_backup = 1
           
-          # 依然锁定纯正 64 位架构，提供稳定秒回底层
           android.archs = arm64-v8a
           
           presplash.duration = 3
