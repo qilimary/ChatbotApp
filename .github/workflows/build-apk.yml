@@ -33,23 +33,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Java 8 (for legacy sdkmanager)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '8'
-          java-package: jdk
-
-      - name: Verify Java installations
+      - name: Verify Java installation
         run: |
-          echo "==== Java 17 (for buildozer) ===="
-          java -version 2>&1
           echo "JAVA_HOME=$JAVA_HOME"
-          echo ""
-          echo "==== 搜索 Java 8 路径 ===="
-          find /opt/hostedtoolcache -name "java" -path "*jdk-8*" -o -name "java" -path "*8.0*" 2>/dev/null | head -5
-          find /opt -name "java" -path "*temurin-8*" 2>/dev/null | head -5
-          ls /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/ 2>/dev/null
+          java -version 2>&1
+          which java
+          readlink -f $(which java)
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -123,15 +112,11 @@ jobs:
           fi
           ln -s "$ANDROID_HOME" "$BUILD_DIR"
 
-          # 关键修复：把旧版 tools/bin/sdkmanager 替换为包装脚本，
-          # 让它直接调用新版 cmdline-tools/latest/bin/sdkmanager（兼容 Java 17）
           LEGACY_SDKMANAGER="$ANDROID_HOME/tools/bin/sdkmanager"
-          NEW_SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
           echo "---- 替换 $LEGACY_SDKMANAGER 为包装脚本 ----"
           cat > /tmp/sdkmanager_wrapper.sh << 'WRAPPER'
           #!/bin/bash
-          # 包装脚本：转发到新版 cmdline-tools/latest/bin/sdkmanager
           REAL_SDKMANAGER="$(dirname "$(dirname "$(dirname "$0")")")/cmdline-tools/latest/bin/sdkmanager"
           if [ -x "$REAL_SDKMANAGER" ]; then
               exec "$REAL_SDKMANAGER" "$@"
@@ -141,9 +126,8 @@ jobs:
           fi
           WRAPPER
           chmod +x /tmp/sdkmanager_wrapper.sh
-          sudo cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER" 2>/dev/null || cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER"
+          cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER" 2>/dev/null || sudo cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER"
           chmod +x "$LEGACY_SDKMANAGER"
-          chown $(id -u):$(id -g) "$LEGACY_SDKMANAGER" 2>/dev/null || true
 
           echo "---- 同样包装 avdmanager ----"
           LEGACY_AVDMANAGER="$ANDROID_HOME/tools/bin/avdmanager"
@@ -162,12 +146,10 @@ jobs:
           chmod +x "$LEGACY_AVDMANAGER"
 
           echo "==== 验证包装脚本 ===="
-          echo "---- 旧版 sdkmanager 内容（前 5 行） ----"
           head -5 "$LEGACY_SDKMANAGER"
           echo "---- 测试调用 ----"
           "$LEGACY_SDKMANAGER" --version 2>&1
           echo ""
-          echo "---- buildozer 期望路径检查 ----"
           ls -la "$BUILD_DIR/tools/bin/" | head -20
 
       - name: Cache NDK and p4a
@@ -177,7 +159,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v9-${{ runner.os }}
+          key: ndk-p4a-v10-${{ runner.os }}
 
       - name: Download chatbot zip
         run: |
