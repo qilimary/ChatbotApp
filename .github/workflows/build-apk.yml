@@ -102,16 +102,13 @@ jobs:
           mkdir -p NativeApp
           cd NativeApp
 
-          # ==============================================================
-          # 核心修复 2.0：先创建一个空的 settings.gradle 骗过 Gradle 9.x
-          # 这样它才允许我们执行降级命令！
-          # ==============================================================
+          # 先创建一个空的 settings.gradle 骗过 Gradle 降级机制
           touch settings.gradle
           gradle wrapper --gradle-version 8.1.1
           
-          echo "==== 降级环境生成完毕，开始写入真实配置 ===="
+          echo "==== 降级环境生成完毕，开始写入真实现代化配置 ===="
 
-          # 1. 根目录 Gradle 配置 (覆写那个空的 settings.gradle)
+          # 1. 根目录 settings.gradle
           cat > settings.gradle << 'EOF'
           pluginManagement {
               repositories { gradlePluginPortal(); google(); mavenCentral() }
@@ -124,23 +121,22 @@ jobs:
           include ':app'
           EOF
 
+          # 2. 根目录 build.gradle (核心修复：彻底抛弃 classpath，采用现代化 plugins 声明)
           cat > build.gradle << 'EOF'
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.1.1'
-                  classpath 'com.chaquo.python:gradle:14.0.2'
-              }
+          plugins {
+              id 'com.android.application' version '8.1.1' apply false
+              id 'com.chaquo.python' version '15.6.0' apply false
           }
           EOF
 
-          # 2. APP 目录搭建
+          # 3. APP 目录搭建
           mkdir -p app/src/main/java/com/lear/chatbot
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/python
 
+          # 4. APP 模块 build.gradle
           cat > app/build.gradle << 'EOF'
           plugins {
               id 'com.android.application'
@@ -164,8 +160,8 @@ jobs:
           }
           chaquopy {
               defaultConfig {
-                  version "3.10"
-                  buildPython "/usr/bin/python3"
+                  version = "3.10"
+                  buildPython("/usr/bin/python3")
               }
           }
           dependencies {
@@ -176,7 +172,7 @@ jobs:
           }
           EOF
 
-          # 3. AndroidManifest
+          # 5. AndroidManifest
           cat > app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -199,7 +195,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. 界面 XML 布局 (完美解决 Emoji、输入框遮挡、长按复制)
+          # 6. 界面 XML 布局
           cat > app/src/main/res/values/colors.xml << 'EOF'
           <resources>
               <color name="bg_color">#F2F2F7</color>
@@ -247,7 +243,7 @@ jobs:
           </LinearLayout>
           EOF
 
-          # 5. 原生 Java 核心逻辑
+          # 7. 原生 Java 核心逻辑
           cat > app/src/main/java/com/lear/chatbot/MainActivity.java << 'EOF'
           package com.lear.chatbot;
           import android.os.Bundle;
@@ -316,7 +312,7 @@ jobs:
                               }
                           }
                       } catch (Exception e) {
-                          addMessage(new Message("【引擎预热失败】" + e.getMessage(), false, true));
+                          addMessage(new Message("【引擎预热失败】\n" + e.getMessage(), false, true));
                       }
                   }).start();
               }
@@ -343,7 +339,7 @@ jobs:
                               }
                           }
                       } catch (Exception e) {
-                          addMessage(new Message("【错误】" + e.getMessage(), false, true));
+                          addMessage(new Message("【错误】\n" + e.getMessage(), false, true));
                       } finally {
                           runOnUiThread(() -> {
                               btnSend.setEnabled(true);
@@ -407,7 +403,7 @@ jobs:
           }
           EOF
 
-          # 6. 拷贝 Python 源码并创建桥接器
+          # 8. 拷贝 Python 源码并创建桥接器
           cp -r ../python_source/* app/src/main/python/
           cat > app/src/main/python/lear_wrapper.py << 'EOF'
           import os, sys, json, traceback
@@ -435,7 +431,6 @@ jobs:
       - name: Build Native Android APK using Gradle
         run: |
           cd NativeApp
-          # 这里通过我们刚才生成的 wrapper 执行真实打包
           ./gradlew assembleDebug
 
       - name: Upload Native APK
