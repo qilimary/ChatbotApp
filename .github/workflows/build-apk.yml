@@ -99,16 +99,19 @@ jobs:
       - name: Generate Native Android Project (Java + XML + Chaquopy)
         run: |
           echo "==== 开始凭空生成原生 Android Studio 工程 ===="
-          mkdir NativeApp
+          mkdir -p NativeApp
           cd NativeApp
 
           # ==============================================================
-          # 核心修复：必须在空目录下生成 Wrapper！
-          # 强行将引擎降级锁定在 8.1.1，彻底解决 Gradle 9 带来的高版本报错
+          # 核心修复 2.0：先创建一个空的 settings.gradle 骗过 Gradle 9.x
+          # 这样它才允许我们执行降级命令！
           # ==============================================================
+          touch settings.gradle
           gradle wrapper --gradle-version 8.1.1
+          
+          echo "==== 降级环境生成完毕，开始写入真实配置 ===="
 
-          # 1. 根目录 Gradle 配置
+          # 1. 根目录 Gradle 配置 (覆写那个空的 settings.gradle)
           cat > settings.gradle << 'EOF'
           pluginManagement {
               repositories { gradlePluginPortal(); google(); mavenCentral() }
@@ -432,6 +435,7 @@ jobs:
       - name: Build Native Android APK using Gradle
         run: |
           cd NativeApp
+          # 这里通过我们刚才生成的 wrapper 执行真实打包
           ./gradlew assembleDebug
 
       - name: Upload Native APK
