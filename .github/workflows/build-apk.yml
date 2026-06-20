@@ -88,14 +88,21 @@ jobs:
               if not fname.endswith(".py"): continue
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               new_content = content
+              
+              # 优化并发，防止手机卡死
               new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
               new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
-              # 修复 syntax error: 内部使用双引号 "items" 避免 bash 单引号冲突
+              
+              # 【修复 1】：过滤掉集合里的 ellipsis (...) 对象，只保留字符串，防止 in 判断崩溃
               new_content = new_content.replace(
                   "self.bonus_terms.items()", 
-                  "(self.bonus_terms.items() if hasattr(self.bonus_terms, \"items\") else {k: 1.0 for k in self.bonus_terms}.items())"
+                  "(self.bonus_terms.items() if hasattr(self.bonus_terms, \"items\") else {k: 1.0 for k in self.bonus_terms if isinstance(k, str)}.items())"
               )
+              
+              # 【修复 2】：自动解开 Python 里的系统消息注释，让系统消息能发到前端！
+              new_content = new_content.replace("# self.messages.append(str(text))", "self.messages.append(str(text))")
+              
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
@@ -217,7 +224,6 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/drawer_layout" android:layout_width="match_parent" android:layout_height="match_parent">
               <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/bg_color">
-                  
                   <RelativeLayout android:layout_width="match_parent" android:layout_height="56dp" android:background="@color/white" android:elevation="2dp">
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
@@ -226,17 +232,13 @@ jobs:
                       <TextView android:id="@+id/tv_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerInParent="true" android:text="李尔" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
                       <ImageButton android:id="@+id/btn_new_session" android:layout_width="48dp" android:layout_height="48dp" android:layout_alignParentEnd="true" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
                   </RelativeLayout>
-
                   <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" android:scrollbars="vertical" android:scrollbarThumbVertical="@android:color/darker_gray" android:scrollbarSize="4dp" android:fadeScrollbars="false" />
-                  
                   <ProgressBar android:id="@+id/loading_bar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" android:indeterminateTint="@color/accent_blue" />
-                  
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="8dp" android:background="@color/white" android:elevation="4dp">
                       <EditText android:id="@+id/input_message" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:hint="输入消息..." android:textColorHint="@color/gray_text" android:background="@drawable/bg_input" android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="10dp" android:paddingBottom="10dp" android:textSize="15sp" android:textColor="@color/black" android:maxLines="4" android:inputType="textMultiLine|textCapSentences" android:imeOptions="actionSend" />
                       <com.google.android.material.button.MaterialButton android:id="@+id/btn_send" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="发送" android:textColor="@color/white" app:backgroundTint="@color/accent_blue" app:cornerRadius="10dp" />
                   </LinearLayout>
               </LinearLayout>
-
               <LinearLayout android:layout_width="300dp" android:layout_height="match_parent" android:layout_gravity="start" android:orientation="vertical" android:background="@color/white" android:fitsSystemWindows="true">
                   <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:text="最近对话" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
                   <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border_gray" />
@@ -416,19 +418,12 @@ jobs:
                   val text = inputMessage.text.toString().trim()
                   if (text.isEmpty()) return
 
-                  // 彻底解决输入框没清空/卡死的问题：强制清空并锁死输入框
-                  inputMessage.setText("")
-                  inputMessage.clearFocus()
-                  val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-                  imm.hideSoftInputFromWindow(inputMessage.windowToken, 0)
+                  inputMessage.setText(""); inputMessage.clearFocus()
+                  val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager; imm.hideSoftInputFromWindow(inputMessage.windowToken, 0)
                   inputMessage.isEnabled = false
                   
                   val isFirst = currentSession.messages.none { it.isUser }
-                  if (isFirst) {
-                      currentSession.preview = if (text.length > 12) text.substring(0, 12) + "..." else text
-                      if (currentSession !in histories) histories.add(0, currentSession)
-                  }
-
+                  if (isFirst) { currentSession.preview = if (text.length > 12) text.substring(0, 12) + "..." else text; if (currentSession !in histories) histories.add(0, currentSession) }
                   val userMsg = ChatMessage(text, isUser = true); currentSession.messages.add(userMsg); chatAdapter.addMessage(userMsg)
                   scrollToBottom(); saveAllHistory(); refreshHistory()
 
@@ -458,10 +453,7 @@ jobs:
                               scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock()
                           }
                       } catch (e: Throwable) { showErrorDialog("环境通信异常", e.stackTraceToString()) } 
-                      finally {
-                          isProcessing = false; btnSend.text = "发送"; inputMessage.isEnabled = true
-                          btnSend.isEnabled = inputMessage.text.isNotBlank(); loadingBar.visibility = View.GONE
-                      }
+                      finally { isProcessing = false; btnSend.text = "发送"; inputMessage.isEnabled = true; btnSend.isEnabled = inputMessage.text.isNotBlank(); loadingBar.visibility = View.GONE }
                   }
               }
 
@@ -503,12 +495,19 @@ jobs:
 
               private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
               private fun isSystemMessage(text: String): Boolean = text.startsWith("【") && text.endsWith("】")
+              
               private fun checkSystemMessageLock() {
                   val lastMsg = currentSession.messages.lastOrNull()
                   if (lastMsg != null && lastMsg.isSystem) { btnSend.isEnabled = false; inputMessage.isEnabled = false; inputMessage.hint = "会话已结束" } 
                   else { inputMessage.isEnabled = true; if (inputMessage.hint == "会话已结束") inputMessage.hint = "输入消息..." }
               }
-              private fun showErrorDialog(title: String, message: String) { AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("确定", null).setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }.show() }
+
+              // 【关键修复：生命周期安全检查】
+              private fun showErrorDialog(title: String, message: String) { 
+                  if (isFinishing || isDestroyed) return
+                  AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("确定", null).setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }.show() 
+              }
+              
               private fun copyToClipboard(label: String, text: String) { val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; clipboard.setPrimaryClip(ClipData.newPlainText(label, text)); Toast.makeText(this, "已复制到剪贴板，请发给开发者", Toast.LENGTH_SHORT).show() }
               private fun showFontSizeDialog() {
                   val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 32, 48, 16) }
@@ -521,7 +520,6 @@ jobs:
               private fun showDeleteDialog(session: ChatSession) { AlertDialog.Builder(this).setTitle("提示").setMessage("是否删除此记录？").setPositiveButton("删除") { _, _ -> deleteSession(session) }.setNegativeButton("取消", null).show() }
               private fun showClearAllDialog() { AlertDialog.Builder(this).setTitle("警告").setMessage("确认清空所有聊天记录？").setPositiveButton("清空") { _, _ -> histories.clear(); saveAllHistory(); refreshHistory(); chatAdapter.clearMessages(); currentSession = ChatSession(); startNewSession() }.setNegativeButton("取消", null).show() }
 
-              // 解决UI卡死：将写文件转移到后台异步线程
               private fun saveAllHistory() {
                   val snap = histories.map { session -> ChatSession(session.id, session.preview, session.messages.map { it.copy() }.toMutableList()) }.toList()
                   lifecycleScope.launch(Dispatchers.IO) {
@@ -610,6 +608,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: 李尔聊天机器人-基础版APK
+          name: 李尔聊天机器人-修复版APK
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
