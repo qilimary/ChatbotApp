@@ -89,7 +89,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v16-${{ runner.os }}
+          key: ndk-p4a-v17-${{ runner.os }}
 
       - name: Pre-clone python-for-android master
         run: |
@@ -143,7 +143,7 @@ jobs:
 
       - name: Auto-patch source code (Disable Multiprocessing & Add Timeout)
         run: |
-          echo "==== 应用极限优化：完全阉割多进程，强制单线程运行 ===="
+          echo "==== 应用极限优化 ===="
           python3 -c '
           import os, re
           for fname in os.listdir("."):
@@ -151,29 +151,26 @@ jobs:
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               
               new_content = content
-              # 1. 强制破坏多进程开启条件，改为纯单线程，完美解决安卓卡顿！
               new_content = re.sub(
                   r"self\.use_parallel\s*=\s*.+",
-                  "self.use_parallel = False  # [CI Auto-Patch] Disabled Multiprocessing",
+                  "self.use_parallel = False",
                   new_content
               )
               new_content = re.sub(
                   r"self\.max_workers\s*=\s*.+",
-                  "self.max_workers = 1  # [CI Auto-Patch] Forced single thread",
+                  "self.max_workers = 1",
                   new_content
               )
-              
-              # 2. 给所有的事件等待 .wait() 强制加上超时，防止底层死锁
               new_content = new_content.replace(
                   "self._index_ready_event.wait()",
-                  "self._index_ready_event.wait(timeout=15.0)  # [CI Auto-Patch] Timeout protection"
+                  "self._index_ready_event.wait(timeout=15.0)"
               )
 
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Generate main.py (UI+Performance Merged Masterpiece)
+      - name: Generate main.py (System Message & Emoticon Filter Edition)
         run: |
           cat > main.py << 'EOF'
           # -*- coding: utf-8 -*-
@@ -234,9 +231,35 @@ jobs:
                   CJK_FONT = _fp
                   break
 
-          def strip_emojis(text):
+          # 【核心后处理 1】：精准剥离无法渲染的颜文字
+          def strip_unsupported_emoticons(text):
               if not text: return text
-              return re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
+              emoticons_to_remove = [
+                  "(｡◕‿◕｡)", "('◡')", "٩(◕‿◕｡)۶",
+                  "(｡♥‿♥｡)", "(◕‿◕✿)",
+                  "(→_→)", "(；一_一)",
+                  "(｡•́︿•̀｡)"
+              ]
+              for emo in emoticons_to_remove:
+                  text = text.replace(emo, "")
+              
+              # 常规 emoji 清理
+              text = re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
+              return text.strip()
+
+          # 【核心组件 2】：系统提示信息专用灰色居中条
+          class SystemMessageRow(BoxLayout):
+              def __init__(self, text, font_size=12, **kwargs):
+                  super().__init__(**kwargs)
+                  self.orientation = "horizontal"
+                  self.size_hint_y = None
+                  self.height = dp(40)
+                  self.padding = (dp(10), dp(10))
+                  
+                  lbl = Label(text=text, font_name=CJK_FONT, font_size=dp(font_size),
+                              color=(0.55, 0.55, 0.55, 1), halign="center", valign="middle")
+                  self.add_widget(lbl)
+
 
           class ModernButton(ButtonBehavior, Label):
               def __init__(self, bg_color=COLOR_ACCENT, corner_radius=8, **kwargs):
@@ -326,11 +349,14 @@ jobs:
                   self.background_color = (0.95, 0.95, 0.96, 1)  
                   self.background_normal = ""
                   self.background_active = ""
+                  self.background_disabled_normal = ""
                   self.cursor_color = COLOR_ACCENT
                   self.foreground_color = (0.05, 0.05, 0.05, 1)  
+                  self.disabled_foreground_color = (0.5, 0.5, 0.5, 1)
                   self.hint_text_color = (0.6, 0.6, 0.6, 1)
 
               def on_touch_down(self, touch):
+                  if self.disabled: return False
                   if self.collide_point(*touch.pos):
                       self.focus = True
                   return super().on_touch_down(touch)
@@ -424,7 +450,6 @@ jobs:
                   
                   max_w = Window.width * 0.72
                   
-                  # 【关键内存渲染优化】引入旧版的 _last_width 防御，拒绝无限套娃重绘卡顿
                   if self.texture_size[0] > max_w or '\n' in self.text:
                       if getattr(self, "_last_wrap_width", None) != max_w:
                           self._last_wrap_width = max_w
@@ -504,7 +529,6 @@ jobs:
 
                   main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
                   
-                  # ---- 导航栏 ----
                   title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(48))
                   with title_bar.canvas.before:
                       Color(*COLOR_TITLE_BG)
@@ -539,7 +563,6 @@ jobs:
                   title_bar.add_widget(right_box)
                   main_layout.add_widget(title_bar)
 
-                  # ---- 聊天显示区 ----
                   self.scroll = ScrollView(
                       size_hint=(1, 1), 
                       scroll_type=['bars', 'content'], 
@@ -562,7 +585,6 @@ jobs:
                   self.scroll.add_widget(self.chat_container)
                   main_layout.add_widget(self.scroll)
 
-                  # ---- 输入区 ----
                   input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(60), spacing=dp(10), padding=[dp(12), dp(10), dp(12), dp(10)])
                   with input_area.canvas.before:
                       Color(*COLOR_TITLE_BG)
@@ -586,7 +608,6 @@ jobs:
                   
                   self.root.add_widget(main_layout)
 
-                  # ---- 侧边栏 ----
                   self.overlay = Button(background_color=(0,0,0,1), opacity=0, size_hint=(1, 1), pos_hint={"x": 2, "y": 0})
                   self.overlay.bind(on_release=self.close_drawer)
                   self.root.add_widget(self.overlay)
@@ -627,6 +648,22 @@ jobs:
                   threading.Thread(target=self._load_backend_thread, daemon=True).start()
                   return self.root
 
+              def _check_and_render_message(self, text, is_user=False, target_record=None):
+                  """核心渲染器：拦截系统提示进行特殊渲染，并判断是否锁定输入框"""
+                  if not text: return
+                  
+                  is_sys_msg = text.startswith("【") and text.endswith("】")
+                  
+                  if is_sys_msg:
+                      self.chat_layout.add_widget(SystemMessageRow(text, font_size=self.chat_font_size - 2))
+                      # 只要该会话的最后一条是系统终止消息，就自动禁用输入框
+                      if target_record and self.current_record == target_record:
+                          self.send_btn.set_disabled(True)
+                          self.text_input.disabled = True
+                          self.text_input.hint_text = "会话已结束"
+                  else:
+                      self.chat_layout.add_widget(MessageRow(text, is_user=is_user, font_size=self.chat_font_size))
+
               def _load_backend_thread(self):
                   try:
                       import lear_main as 李尔
@@ -644,8 +681,8 @@ jobs:
                   msgs = initial_result.get("messages", [])
                   if msgs:
                       for reply in msgs:
-                          clean_reply = strip_emojis(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
+                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
+                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
                           self.current_record["messages"].append({"is_user": False, "text": clean_reply})
 
               def show_font_settings(self, *args):
@@ -733,8 +770,10 @@ jobs:
                   self.session_id = record.get("id")
                   self.chat_layout.clear_widgets()
                   self.is_processing = False
-                  self.send_btn.text = "发送"
+                  
                   self.send_btn.set_disabled(False)
+                  self.text_input.disabled = False
+                  self.text_input.hint_text = "输入消息..."
                   
                   messages = record.get("messages", [])[-60:]
                   self._stagger_load_index = 0
@@ -758,7 +797,7 @@ jobs:
                   for _ in range(2):
                       if self._stagger_load_index >= len(self._stagger_messages): break
                       m = self._stagger_messages[self._stagger_load_index]
-                      self.chat_layout.add_widget(MessageRow(m["text"], is_user=m.get("is_user"), is_error=False, font_size=self.chat_font_size))
+                      self._check_and_render_message(m["text"], is_user=m.get("is_user"), target_record=self.current_record)
                       self._stagger_load_index += 1
                   Clock.schedule_once(self._staggered_load_step, 0)
 
@@ -789,8 +828,12 @@ jobs:
                   self.current_record = {"id": None, "preview": "新对话", "messages": []}
                   self.session_id = None
                   self.is_processing = False
+                  
                   self.send_btn.text = "发送"
                   self.send_btn.set_disabled(False)
+                  self.text_input.disabled = False
+                  self.text_input.hint_text = "输入消息..."
+                  
                   self.close_drawer()
                   
                   if not self.is_ready: return
@@ -809,8 +852,8 @@ jobs:
               def _on_new_session_success(self, msgs):
                   if msgs:
                       for reply in msgs:
-                          clean_reply = strip_emojis(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
+                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
+                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
                           self.current_record["messages"].append({"is_user": False, "text": clean_reply})
 
               def _scroll_to_bottom(self):
@@ -818,7 +861,7 @@ jobs:
 
               def send_message(self, instance):
                   if not self.is_ready or self.is_processing: return
-                  text = strip_emojis((self.text_input.text or "").strip())
+                  text = strip_unsupported_emoticons((self.text_input.text or "").strip())
                   if not text: return
                   
                   is_first_message = not any(m.get("is_user") for m in self.current_record.get("messages", []))
@@ -827,7 +870,7 @@ jobs:
                       if self.current_record not in self.histories:
                           self.histories.insert(0, self.current_record)
 
-                  self.chat_layout.add_widget(MessageRow(text, is_user=True, font_size=self.chat_font_size))
+                  self._check_and_render_message(text, is_user=True, target_record=self.current_record)
                   self.current_record["messages"].append({"is_user": True, "text": text})
                   self._scroll_to_bottom()
                   self.save_all_history()
@@ -858,7 +901,7 @@ jobs:
                       target_record["id"] = new_session_id
                       
                   for reply in replies:
-                      clean_reply = strip_emojis(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
+                      clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
                       target_record["messages"].append({"is_user": False, "text": clean_reply})
 
                   if self.current_record == target_record:
@@ -868,8 +911,8 @@ jobs:
                       self.send_btn.set_disabled(False)
                       
                       for reply in replies:
-                          clean_reply = strip_emojis(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
+                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
+                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
                       
                       self._scroll_to_bottom()
                       
@@ -899,7 +942,7 @@ jobs:
           package.domain = org.lear
           source.dir = .
           source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.12
+          version = 1.0.13
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
