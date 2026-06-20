@@ -16,16 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Print env info
-        run: |
-          uname -a
-          df -h /
-
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc
           sudo apt-get clean
-          df -h /
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -50,11 +44,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1" "sh>=2.0,<3.0"
-          buildozer version
 
       - name: Setup Android SDK
         run: |
-          echo "==== Install Android SDK ===="
           export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}"
           mkdir -p $ANDROID_HOME/cmdline-tools
           cd /tmp
@@ -63,7 +55,6 @@ jobs:
           mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-          echo "==== Pre-write license files ===="
           mkdir -p $ANDROID_HOME/licenses
           printf '\n8933bad161af4177641a525b71e2a3b3\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > $ANDROID_HOME/licenses/android-sdk-license
           printf '\nd56f5187479451eabf01fb78af6dfcb131a6481e\n' > $ANDROID_HOME/licenses/android-sdk-preview-license
@@ -72,7 +63,6 @@ jobs:
           printf '\n33b6a2b64607f11b759f320ef9054a8cd123aaa9\n' > $ANDROID_HOME/licenses/google-gdk-license
           printf '\ne9acab5b5fbb560a72cfaecf894e659d05d8a2ab\n' > $ANDROID_HOME/licenses/mips-android-sysimage-license
 
-          echo "==== Install SDK packages ===="
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" >/dev/null
           sdkmanager "tools" >/dev/null
@@ -99,7 +89,7 @@ jobs:
             ~/.buildozer/android/platform/android-ndk-r25b
             ~/.buildozer/android/platform/python-for-android
             /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v15-${{ runner.os }}
+          key: ndk-p4a-v16-${{ runner.os }}
 
       - name: Pre-clone python-for-android master
         run: |
@@ -151,8 +141,9 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Auto-patch Multi-threading Performance
+      - name: Auto-patch source code (Disable Multiprocessing & Add Timeout)
         run: |
+          echo "==== 应用极限优化：完全阉割多进程，强制单线程运行 ===="
           python3 -c '
           import os, re
           for fname in os.listdir("."):
@@ -160,34 +151,29 @@ jobs:
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               
               new_content = content
-              new_content = new_content.replace("ProcessPoolExecutor", "ThreadPoolExecutor")
-              new_content = new_content.replace("concurrent.futures.ProcessPoolExecutor", "concurrent.futures.ThreadPoolExecutor")
+              # 1. 强制破坏多进程开启条件，改为纯单线程，完美解决安卓卡顿！
+              new_content = re.sub(
+                  r"self\.use_parallel\s*=\s*.+",
+                  "self.use_parallel = False  # [CI Auto-Patch] Disabled Multiprocessing",
+                  new_content
+              )
+              new_content = re.sub(
+                  r"self\.max_workers\s*=\s*.+",
+                  "self.max_workers = 1  # [CI Auto-Patch] Forced single thread",
+                  new_content
+              )
+              
+              # 2. 给所有的事件等待 .wait() 强制加上超时，防止底层死锁
               new_content = new_content.replace(
                   "self._index_ready_event.wait()",
-                  "self._index_ready_event.wait(timeout=15.0)"
+                  "self._index_ready_event.wait(timeout=15.0)  # [CI Auto-Patch] Timeout protection"
               )
 
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Pre-generate Bot Cache (Fix Hang Issue)
-        run: |
-          echo "==== 触发倒排索引预编译缓存 ===="
-          timeout 90 python3 -c '
-          import os, sys, time
-          try:
-              import lear_main
-              if hasattr(lear_main, "web_start_session"):
-                  lear_main.web_start_session()
-                  time.sleep(45)
-          except Exception as e: pass
-          finally:
-              os._exit(0)
-          ' || true
-          ls -la
-
-      - name: Generate main.py (Final Masterpiece Version)
+      - name: Generate main.py (UI+Performance Merged Masterpiece)
         run: |
           cat > main.py << 'EOF'
           # -*- coding: utf-8 -*-
@@ -336,13 +322,12 @@ jobs:
 
           class RoundedInput(TextInput):
               def __init__(self, **kwargs):
-                  # 彻底解决打字看不见的问题：摒弃Canvas画背景，使用原生属性
                   super().__init__(**kwargs)
-                  self.background_color = (0.95, 0.95, 0.96, 1)  # 浅灰底色
+                  self.background_color = (0.95, 0.95, 0.96, 1)  
                   self.background_normal = ""
                   self.background_active = ""
                   self.cursor_color = COLOR_ACCENT
-                  self.foreground_color = (0.05, 0.05, 0.05, 1)  # 黑色字体
+                  self.foreground_color = (0.05, 0.05, 0.05, 1)  
                   self.hint_text_color = (0.6, 0.6, 0.6, 1)
 
               def on_touch_down(self, touch):
@@ -418,7 +403,7 @@ jobs:
                   
                   self.size_hint = (None, None)
                   self.halign = "left"
-                  self.valign = "top" # 优化多行文字对齐
+                  self.valign = "top" 
                   self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
                   
                   bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
@@ -439,10 +424,12 @@ jobs:
                   
                   max_w = Window.width * 0.72
                   
-                  # 彻底解决换行问题：无论遇到真实的\n还是超长，都强制约束宽度允许换行
+                  # 【关键内存渲染优化】引入旧版的 _last_width 防御，拒绝无限套娃重绘卡顿
                   if self.texture_size[0] > max_w or '\n' in self.text:
-                      self.text_size = (max_w, None)
-                      self.texture_update()
+                      if getattr(self, "_last_wrap_width", None) != max_w:
+                          self._last_wrap_width = max_w
+                          self.text_size = (max_w, None)
+                          self.texture_update()
                   
                   self.text_size = (self.texture_size[0], self.texture_size[1])
                   self.size = (self.texture_size[0] + dp(28), self.texture_size[1] + dp(20))
@@ -483,7 +470,6 @@ jobs:
               def __init__(self, **kwargs):
                   super().__init__(**kwargs)
                   self.chatbot_module = None
-                  # 取消所有的等待逻辑，上来就随时可用！
                   self.is_ready = True 
                   self.session_id = None
                   self.is_processing = False
@@ -540,7 +526,6 @@ jobs:
                   left_box.add_widget(menu_btn)
                   left_box.add_widget(font_btn)
                   
-                  # 去掉 loading 文本
                   self.title_lbl = Label(text="李尔", font_name=CJK_FONT, font_size=dp(16), bold=True, color=COLOR_TITLE_FG)
                   
                   right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
@@ -591,11 +576,9 @@ jobs:
                       input_area._line.size = (input_area.width, dp(1))
                   input_area.bind(pos=update_input_bg, size=update_input_bg)
                   
-                  # 去掉 loading，直接提示输入
                   self.text_input = RoundedInput(hint_text="输入消息...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
                   input_area.add_widget(self.text_input)
                   
-                  # 按钮直接可用
                   self.send_btn = ModernButton(text="发送", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
                   self.send_btn.bind(on_release=self.send_message)
                   input_area.add_widget(self.send_btn)
@@ -661,7 +644,6 @@ jobs:
                   msgs = initial_result.get("messages", [])
                   if msgs:
                       for reply in msgs:
-                          # 强制清理并转换所有可能被转义的换行符
                           clean_reply = strip_emojis(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
                           self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
                           self.current_record["messages"].append({"is_user": False, "text": clean_reply})
@@ -916,8 +898,8 @@ jobs:
           package.name = mychatbot
           package.domain = org.lear
           source.dir = .
-          source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini,pkl,bin,dat,idx,npy
-          version = 1.0.11
+          source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
+          version = 1.0.12
           requirements = python3,kivy
           orientation = portrait
           fullscreen = 0
