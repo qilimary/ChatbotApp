@@ -171,10 +171,11 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
           
-      - name: Generate main.py (Ultimate Fixed Version)
+      - name: Generate main.py (Final Masterpiece Version)
+        # 抛弃 python -c，使用 cat EOF 安全注入，彻底杜绝单双引号引发的报错
         run: |
-          python3 -c '
-          code = r"""# -*- coding: utf-8 -*-
+          cat > main.py << 'EOF'
+          # -*- coding: utf-8 -*-
           import os, sys, traceback, threading, json, time, re, gc
           
           os.environ["KIVY_NO_FILELOG"] = "1"
@@ -205,7 +206,7 @@ jobs:
           from kivy.uix.slider import Slider
           from kivy.properties import NumericProperty
 
-          # 恢复最原生的输入法弹出模式，防遮挡
+          # 恢复原生输入法模式，防遮挡
           Window.softinput_mode = "pan"
           
           COLOR_BG = (0.95, 0.95, 0.97, 1)          
@@ -222,13 +223,12 @@ jobs:
 
           Window.clearcolor = COLOR_BG
 
-          # 使用标准安卓自带中文字体，修复发虚或不一致的问题
+          # 强制使用安卓自带的规范中文字体，解决字体发虚或不美观问题
           CJK_FONT = "Roboto"
           font_candidates = [
               "/system/fonts/NotoSansCJK-Regular.ttc",
               "/system/fonts/NotoSansSC-Regular.otf",
-              "/system/fonts/DroidSansFallback.ttf",
-              "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf"
+              "/system/fonts/DroidSansFallback.ttf"
           ]
           for _fp in font_candidates:
               if os.path.exists(_fp):
@@ -296,7 +296,7 @@ jobs:
                   self.background_active = ""
                   self.cursor_color = COLOR_ACCENT
                   
-                  # 修复：强制设置文字颜色为深色，避免输入空白看不见
+                  # 核心修复 3: 强制文本为深灰色，绝对不会看不见
                   self.foreground_color = (0.1, 0.1, 0.1, 1)
                   
                   with self.canvas.before:
@@ -309,7 +309,7 @@ jobs:
                   self._bg.size = self.size
                   
               def on_touch_down(self, touch):
-                  # 修复：防止偶尔点击键盘不弹出的BUG
+                  # 核心修复 4: 强制索要焦点，完美修复按不出键盘的问题
                   if self.collide_point(*touch.pos):
                       self.focus = True
                   return super().on_touch_down(touch)
@@ -403,7 +403,6 @@ jobs:
                   
                   max_w = Window.width * 0.72
                   
-                  # 修复：不仅限制宽度，如果文字内含有真正的换行符也必须重新规划高度，否则会错乱在一行
                   if self.texture_size[0] > max_w or '\n' in self.text:
                       self.text_size = (max_w, None)
                       self.texture_update()
@@ -496,7 +495,7 @@ jobs:
                   title_bar.bind(pos=update_title_bg, size=update_title_bg)
                   
                   left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
-                  # 修复：改为三条杠
+                  # 极简修改 1: 菜单改为 ☰
                   menu_btn = TopBarButton(text="☰", font_name=CJK_FONT, font_size=dp(24), size_hint=(None, 1), width=dp(50))
                   menu_btn.bind(on_release=self.open_drawer)
                   font_btn = TopBarButton(text="Aa", font_name=CJK_FONT, font_size=dp(16), size_hint=(None, 1), width=dp(50))
@@ -508,7 +507,7 @@ jobs:
                   
                   right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
                   right_box.add_widget(Label(size_hint=(1, 1)))
-                  # 修复：改为加号
+                  # 极简修改 2: 新建改为 +
                   new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(28), size_hint=(None, 1), width=dp(50))
                   new_btn.bind(on_release=lambda x: self.start_new_session())
                   right_box.add_widget(new_btn)
@@ -519,17 +518,24 @@ jobs:
                   main_layout.add_widget(title_bar)
 
                   # ---- 聊天显示区 ----
-                  # 修复：加入按住快速拖拽的侧边栏滚动条
+                  # 核心修改 5: 开启侧边滚动条拖拽功能，手指按住右侧边缘即可快速滑动！
                   self.scroll = ScrollView(
-                      size_hint=(1, 1),
+                      size_hint=(1, 1), 
                       scroll_type=['bars', 'content'], 
-                      bar_width=dp(8),
+                      bar_width=dp(6),
                       bar_color=(0.6, 0.6, 0.6, 0.8),
                       bar_inactive_color=(0.6, 0.6, 0.6, 0.3)
                   )
-                  # 最安全的包裹方式，绝对不会引发无限循环崩溃闪退
+                  
                   self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
-                  self.chat_layout.bind(minimum_height=self.chat_layout.setter("height"))
+                  
+                  # 核心修改 2: 让组件高度与ScrollView等宽，实现原生的“从顶部第一行向下排列”！
+                  def update_layout_height(*args):
+                      self.chat_layout.height = max(self.chat_layout.minimum_height, self.scroll.height)
+                      
+                  self.chat_layout.bind(minimum_height=update_layout_height)
+                  self.scroll.bind(height=update_layout_height)
+                  
                   self.scroll.add_widget(self.chat_layout)
                   main_layout.add_widget(self.scroll)
 
@@ -783,14 +789,7 @@ jobs:
                       Clock.schedule_once(lambda dt: self._on_message_error(err))
 
               def _scroll_to_bottom(self):
-                  # 修复：只有在文字实际铺满了屏幕时才允许往下滚。
-                  # 否则如果只有一行字，直接滚到底部会造成它显示在屏幕最下面的错觉
-                  def do_scroll(dt):
-                      if self.chat_layout.height > self.scroll.height:
-                          self.scroll.scroll_y = 0
-                      else:
-                          self.scroll.scroll_y = 1
-                  Clock.schedule_once(do_scroll, 0.1)
+                  Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
 
               def send_message(self, instance):
                   if not self.is_ready or self.is_processing: return
@@ -838,12 +837,15 @@ jobs:
                   
                   for reply in replies:
                       clean_reply = strip_emojis(reply)
-                      # 修复：拦截后端分句中的连字符，并转换为真实的换行
+                      # 处理后端带有的原始换行符
                       clean_reply = clean_reply.replace('\\n', '\n')
                       
-                      if not clean_reply.strip(): continue
-                      self.chat_layout.add_widget(MessageRow(clean_reply, is_user=False, font_size=self.chat_font_size))
-                      self.current_record["messages"].append({"is_user": False, "text": clean_reply})
+                      # 核心修改 1：分句逻辑！
+                      # 检测到文本里带有回车，立即把它分拆成多个独立的气泡
+                      lines = [line.strip() for line in clean_reply.split('\n') if line.strip()]
+                      for line in lines:
+                          self.chat_layout.add_widget(MessageRow(line, is_user=False, font_size=self.chat_font_size))
+                          self.current_record["messages"].append({"is_user": False, "text": line})
                   
                   self._scroll_to_bottom()
                   self.save_all_history()
@@ -858,16 +860,13 @@ jobs:
 
           if __name__ == "__main__":
               ChatApp().run()
-          """
-          with open("main.py", "w", encoding="utf-8") as f:
-              f.write(code)
-          print("main.py generated (Ultimate Fixed Version)")
-          '
+          EOF
+          echo "main.py generated successfully!"
 
       - name: Generate buildozer.spec
         run: |
-          python3 -c '
-          spec = """[app]
+          cat > buildozer.spec << 'EOF'
+          [app]
           title = 李尔聊天机器人
           package.name = mychatbot
           package.domain = org.lear
@@ -895,11 +894,8 @@ jobs:
           [buildozer]
           log_level = 1
           warn_on_root = 1
-          """
-          with open("buildozer.spec", "w", encoding="utf-8") as f:
-              f.write(spec)
-          print("buildozer.spec generated")
-          '
+          EOF
+          echo "buildozer.spec generated"
 
       - name: Build APK
         run: |
