@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Native Kotlin + Chaquopy)
 
 on:
   workflow_dispatch:
@@ -9,9 +9,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
-    env:
-      ANDROID_HOME: /opt/android-sdk
-      ANDROID_SDK_ROOT: /opt/android-sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,73 +24,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Python
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Setup Python (for gdown)
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install system deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y zip unzip python3-pip expect \
-            autoconf automake libtool pkg-config zlib1g-dev \
-            libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
-            build-essential ccache git libltdl-dev
-
-      - name: Install buildozer and gdown
-        run: |
-          python -m pip install --upgrade pip
-          pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv "gdown>=4.7.1" "sh>=2.0,<3.0"
-
-      - name: Setup Android SDK
-        run: |
-          export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}"
-          mkdir -p $ANDROID_HOME/cmdline-tools
-          cd /tmp
-          wget --no-verbose https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
-          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-
-          mkdir -p $ANDROID_HOME/licenses
-          printf '\n8933bad161af4177641a525b71e2a3b3\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > $ANDROID_HOME/licenses/android-sdk-license
-          printf '\nd56f5187479451eabf01fb78af6dfcb131a6481e\n' > $ANDROID_HOME/licenses/android-sdk-preview-license
-          printf '\n859f317696f67ef3dab8ee7b7e8bf7b6c1aea6e7\n' > $ANDROID_HOME/licenses/android-sdk-arm-dbt-license
-          printf '\nd975f751698a77b662f1254ddbeed3901e7635aa\n' > $ANDROID_HOME/licenses/intel-android-extra-license
-          printf '\n33b6a2b64607f11b759f320ef9054a8cd123aaa9\n' > $ANDROID_HOME/licenses/google-gdk-license
-          printf '\ne9acab5b5fbb560a72cfaecf894e659d05d8a2ab\n' > $ANDROID_HOME/licenses/mips-android-sysimage-license
-
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" >/dev/null
-          sdkmanager "tools" >/dev/null
-
-      - name: Patch legacy sdkmanager
-        run: |
-          BUILD_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          mkdir -p "$(dirname "$BUILD_DIR")"
-          if [ -L "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ]; then rm -rf "$BUILD_DIR"; fi
-          ln -s "$ANDROID_HOME" "$BUILD_DIR"
-          LEGACY_SDKMANAGER="$ANDROID_HOME/tools/bin/sdkmanager"
-          cat > /tmp/sdkmanager_wrapper.sh << 'WRAPPER'
-          #!/bin/bash
-          REAL_SDKMANAGER="$(dirname "$(dirname "$(dirname "$0")")")/cmdline-tools/latest/bin/sdkmanager"
-          if [ -x "$REAL_SDKMANAGER" ]; then exec "$REAL_SDKMANAGER" "$@"; else exit 1; fi
-          WRAPPER
-          chmod +x /tmp/sdkmanager_wrapper.sh
-          cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER" 2>/dev/null || sudo cp /tmp/sdkmanager_wrapper.sh "$LEGACY_SDKMANAGER"
-
-      - name: Cache NDK and p4a
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer/android/platform/android-ndk-r25b
-            ~/.buildozer/android/platform/python-for-android
-            /home/runner/.local/share/python-for-android
-          key: ndk-p4a-v17-${{ runner.os }}
-
-      - name: Pre-clone python-for-android master
-        run: |
-          git clone --depth=1 -b master https://github.com/kivy/python-for-android.git /home/runner/work/python-for-android
+      - name: Install gdown
+        run: pip install "gdown>=4.7.1"
 
       - name: Download chatbot zip
         run: |
@@ -112,14 +54,12 @@ jobs:
           import re, os
           RENAME_MODULES = {"李尔": "lear_main", "单词": "chatbot_words", "数据": "chatbot_data", "成语": "chatbot_idioms"}
           FILE_RENAME = {"字向量_f16_pure.json": "word_vectors.json", "李尔.py": "lear_main.py", "单词.py": "chatbot_words.py", "数据.py": "chatbot_data.py", "成语.py": "chatbot_idioms.py"}
-
           contents = {}
           for cn, en in RENAME_MODULES.items():
               src = cn + ".py"
               if os.path.exists(src):
                   with open(src, "r", encoding="utf-8") as f: contents[en] = f.read()
                   os.remove(src)
-
           def replace_all(content):
               for cn_fn, en_fn in FILE_RENAME.items(): content = content.replace(cn_fn, en_fn)
               for cn, en in RENAME_MODULES.items():
@@ -128,7 +68,6 @@ jobs:
                   content = re.sub(r"(?m)^(\s*)from " + cn + r" import", r"\1from " + en + " import", content)
                   content = re.sub(r"(\s)import " + cn + r"(\s|$)", r"\1import " + en + " as " + cn + r"\2", content)
               return content
-
           for en, content in contents.items():
               with open(en + ".py", "w", encoding="utf-8") as f: f.write(replace_all(content))
           for cn_fn, en_fn in FILE_RENAME.items():
@@ -143,836 +82,1155 @@ jobs:
 
       - name: Auto-patch source code (Disable Multiprocessing & Add Timeout)
         run: |
-          echo "==== 应用极限优化 ===="
           python3 -c '
           import os, re
           for fname in os.listdir("."):
               if not fname.endswith(".py"): continue
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
-              
               new_content = content
-              new_content = re.sub(
-                  r"self\.use_parallel\s*=\s*.+",
-                  "self.use_parallel = False",
-                  new_content
-              )
-              new_content = re.sub(
-                  r"self\.max_workers\s*=\s*.+",
-                  "self.max_workers = 1",
-                  new_content
-              )
-              new_content = new_content.replace(
-                  "self._index_ready_event.wait()",
-                  "self._index_ready_event.wait(timeout=15.0)"
-              )
-
+              new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
+              new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
+              new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Generate main.py (System Message & Emoticon Filter Edition)
+      - name: Generate Android Project Structure
         run: |
-          cat > main.py << 'EOF'
+          set -e
+          mkdir -p app/src/main/java/com/lear/chatbot
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          mkdir -p app/src/main/python
+
+          # ── Copy Python files into Chaquopy python source dir ──
+          cp lear_main.py app/src/main/python/
+          cp chatbot_words.py app/src/main/python/
+          cp chatbot_data.py app/src/main/python/
+          cp chatbot_idioms.py app/src/main/python/
+          cp word_vectors.json app/src/main/python/
+          # Also copy any other py/json files
+          for f in *.py *.json; do
+            [ -f "$f" ] && cp -n "$f" app/src/main/python/ 2>/dev/null || true
+          done
+
+          # ── bootstrap.py: sets working directory then delegates ──
+          cat > app/src/main/python/bootstrap.py << 'PYEOF'
           # -*- coding: utf-8 -*-
-          import os, sys, traceback, threading, json, time, re
-          
-          os.environ["KIVY_NO_FILELOG"] = "1"
-          os.environ["KIVY_NO_CONSOLELOG"] = "1"
+          import os, sys
+          _app_dir = os.path.dirname(os.path.abspath(__file__))
+          os.chdir(_app_dir)
+          if _app_dir not in sys.path:
+              sys.path.insert(0, _app_dir)
+          import lear_main
+          def web_start_session():
+              return lear_main.web_start_session()
+          def web_process_message(text, session_id):
+              return lear_main.web_process_message(text, session_id)
+          PYEOF
 
-          APP_DIR = os.path.dirname(os.path.abspath(__file__))
-          os.chdir(APP_DIR)
-          if APP_DIR not in sys.path:
-              sys.path.insert(0, APP_DIR)
+          # ── settings.gradle ──
+          cat > settings.gradle << 'GRADLE_EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "LearChatbot"
+          include ':app'
+          GRADLE_EOF
 
-          HISTORY_FILE = os.path.join(APP_DIR, "chat_history.json")
-          SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
+          # ── build.gradle (project-level) ──
+          cat > build.gradle << 'GRADLE_EOF'
+          plugins {
+              id 'com.android.application' version '8.1.4' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+              id 'com.chaquo.python' version '15.0.1' apply false
+          }
+          GRADLE_EOF
 
-          from kivy.app import App
-          from kivy.uix.boxlayout import BoxLayout
-          from kivy.uix.floatlayout import FloatLayout
-          from kivy.uix.scrollview import ScrollView
-          from kivy.uix.label import Label
-          from kivy.uix.textinput import TextInput
-          from kivy.uix.button import Button
-          from kivy.core.window import Window
-          from kivy.graphics import Color, RoundedRectangle, Rectangle
-          from kivy.metrics import dp
-          from kivy.clock import Clock, mainthread
-          from kivy.animation import Animation
-          from kivy.uix.behaviors import ButtonBehavior
-          from kivy.uix.popup import Popup
-          from kivy.uix.slider import Slider
-          from kivy.properties import NumericProperty
+          # ── gradle.properties ──
+          cat > gradle.properties << 'GRADLE_EOF'
+          org.gradle.jvmargs=-Xmx4096m
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          GRADLE_EOF
 
-          Window.softinput_mode = "pan"
-          
-          COLOR_BG = (0.95, 0.95, 0.97, 1)          
-          COLOR_TITLE_BG = (1, 1, 1, 1)             
-          COLOR_TITLE_FG = (0.05, 0.05, 0.05, 1)    
-          COLOR_TITLE_BORDER = (0.88, 0.88, 0.88, 1)
-          COLOR_ACCENT = (0.0, 0.48, 1.0, 1)        
-          
-          COLOR_USER_BG = (0.0, 0.48, 1.0, 1)
-          COLOR_USER_FG = (1, 1, 1, 1)
-          COLOR_BOT_BG = (1, 1, 1, 1)               
-          COLOR_BOT_FG = (0.1, 0.1, 0.1, 1)
-          COLOR_ERROR_BG = (1.0, 0.23, 0.19, 1)     
+          # ── app/build.gradle ──
+          cat > app/build.gradle << 'GRADLE_EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+              id 'com.chaquo.python'
+          }
 
-          Window.clearcolor = COLOR_BG
+          android {
+              namespace 'com.lear.chatbot'
+              compileSdk 34
 
-          CJK_FONT = "Roboto"
-          font_candidates = [
-              "/system/fonts/NotoSansCJK-Regular.ttc",
-              "/system/fonts/NotoSansSC-Regular.otf",
-              "/system/fonts/DroidSansFallback.ttf"
-          ]
-          for _fp in font_candidates:
-              if os.path.exists(_fp):
-                  CJK_FONT = _fp
-                  break
+              defaultConfig {
+                  applicationId "com.lear.chatbot"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "2.0.0"
+                  ndk {
+                      abiFilters "arm64-v8a", "x86_64"
+                  }
+                  python {
+                      version "3.10"
+                      pip {
+                          // No third-party packages needed
+                      }
+                  }
+              }
 
-          # 【核心后处理 1】：精准剥离无法渲染的颜文字
-          def strip_unsupported_emoticons(text):
-              if not text: return text
-              emoticons_to_remove = [
-                  "(｡◕‿◕｡)", "('◡')", "٩(◕‿◕｡)۶",
-                  "(｡♥‿♥｡)", "(◕‿◕✿)",
-                  "(→_→)", "(；一_一)",
-                  "(｡•́︿•̀｡)"
-              ]
-              for emo in emoticons_to_remove:
-                  text = text.replace(emo, "")
-              
-              # 常规 emoji 清理
-              text = re.sub(r"[\U00010000-\U0010ffff]|[\u2600-\u27BF]|\u200D|[\u25A0-\u25FF]", "", text)
-              return text.strip()
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
 
-          # 【核心组件 2】：系统提示信息专用灰色居中条
-          class SystemMessageRow(BoxLayout):
-              def __init__(self, text, font_size=12, **kwargs):
-                  super().__init__(**kwargs)
-                  self.orientation = "horizontal"
-                  self.size_hint_y = None
-                  self.height = dp(40)
-                  self.padding = (dp(10), dp(10))
-                  
-                  lbl = Label(text=text, font_name=CJK_FONT, font_size=dp(font_size),
-                              color=(0.55, 0.55, 0.55, 1), halign="center", valign="middle")
-                  self.add_widget(lbl)
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
 
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              implementation 'androidx.recyclerview:recyclerview:1.3.2'
+              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+              implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+          }
+          GRADLE_EOF
 
-          class ModernButton(ButtonBehavior, Label):
-              def __init__(self, bg_color=COLOR_ACCENT, corner_radius=8, **kwargs):
-                  super().__init__(**kwargs)
-                  self.bg_color = bg_color
-                  self.corner_radius = corner_radius
-                  self.color = (1, 1, 1, 1)
-                  self._is_disabled = False
-                  with self.canvas.before:
-                      self._render_color = Color(*self.bg_color)
-                      self._bg = RoundedRectangle(radius=[dp(self.corner_radius)])
-                  self.bind(pos=self._update_bg, size=self._update_bg)
+          # ── AndroidManifest.xml ──
+          cat > app/src/main/AndroidManifest.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.LearChatbot">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          XML_EOF
 
-              def set_disabled(self, disabled):
-                  self._is_disabled = disabled
-                  if disabled:
-                      self._render_color.rgba = (0.7, 0.7, 0.7, 1)
-                  else:
-                      self._render_color.rgba = self.bg_color
+          # ── strings.xml ──
+          cat > app/src/main/res/values/strings.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">李尔</string>
+          </resources>
+          XML_EOF
 
-              def _update_bg(self, *args):
-                  self._bg.pos = self.pos
-                  self._bg.size = self.size
+          # ── colors.xml ──
+          cat > app/src/main/res/values/colors.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="bg_color">#F2F2F7</color>
+              <color name="white">#FFFFFF</color>
+              <color name="black">#0A0A0A</color>
+              <color name="accent_blue">#007AFF</color>
+              <color name="error_red">#FF3B30</color>
+              <color name="user_bubble">#007AFF</color>
+              <color name="user_text">#FFFFFF</color>
+              <color name="bot_bubble">#FFFFFF</color>
+              <color name="bot_text">#1A1A1A</color>
+              <color name="gray_text">#8E8E93</color>
+              <color name="border_gray">#E0E0E0</color>
+              <color name="input_bg">#F2F2F7</color>
+          </resources>
+          XML_EOF
 
-              def on_state(self, instance, value):
-                  if self._is_disabled: return
-                  if value == "down":
-                      self._render_color.rgba = (self.bg_color[0]*0.8, self.bg_color[1]*0.8, self.bg_color[2]*0.8, self.bg_color[3])
-                  else:
-                      self._render_color.rgba = self.bg_color
+          # ── themes.xml ──
+          cat > app/src/main/res/values/themes.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.LearChatbot" parent="Theme.MaterialComponents.Light.NoActionBar">
+                  <item name="colorPrimary">@color/accent_blue</item>
+                  <item name="colorPrimaryVariant">@color/accent_blue</item>
+                  <item name="colorOnPrimary">@color/white</item>
+                  <item name="android:statusBarColor">@color/white</item>
+                  <item name="android:windowLightStatusBar">true</item>
+                  <item name="android:windowBackground">@color/bg_color</item>
+              </style>
+          </resources>
+          XML_EOF
 
-          class MenuButton(ButtonBehavior, BoxLayout):
-              def __init__(self, **kwargs):
-                  super().__init__(**kwargs)
-                  self.size_hint = (None, 1)
-                  self.width = dp(50)
-                  with self.canvas.before:
-                      self._render_color = Color(0, 0, 0, 0)
-                      self._bg = RoundedRectangle(radius=[dp(8)])
-                      Color(*COLOR_TITLE_FG)
-                      self.l1 = Rectangle()
-                      self.l2 = Rectangle()
-                      self.l3 = Rectangle()
-                  self.bind(pos=self._update_rects, size=self._update_rects)
-                  
-              def _update_rects(self, *args):
-                  self._bg.pos = (self.x + dp(4), self.y + dp(4))
-                  self._bg.size = (self.width - dp(8), self.height - dp(8))
-                  cw, ch = dp(20), dp(2)
-                  cx = self.x + (self.width - cw) / 2
-                  cy = self.y + self.height / 2
-                  self.l1.pos = (cx, cy + dp(6))
-                  self.l1.size = (cw, ch)
-                  self.l2.pos = (cx, cy - dp(1))
-                  self.l2.size = (cw, ch)
-                  self.l3.pos = (cx, cy - dp(8))
-                  self.l3.size = (cw, ch)
+          # ── activity_main.xml ──
+          cat > app/src/main/res/layout/activity_main.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <androidx.drawerlayout.widget.DrawerLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:app="http://schemas.android.com/apk/res-auto"
+              android:id="@+id/drawer_layout"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
 
-              def on_state(self, instance, value):
-                  if value == "down":
-                      self._render_color.rgba = (0, 0, 0, 0.08)
-                  else:
-                      self._render_color.rgba = (0, 0, 0, 0)
+              <!-- ── Main content ── -->
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:orientation="vertical"
+                  android:background="@color/bg_color">
 
-          class TopBarButton(ButtonBehavior, Label):
-              def __init__(self, **kwargs):
-                  super().__init__(**kwargs)
-                  self.color = COLOR_TITLE_FG
-                  with self.canvas.before:
-                      self._render_color = Color(0, 0, 0, 0)
-                      self._bg = RoundedRectangle(radius=[dp(8)])
-                  self.bind(pos=self._update_bg, size=self._update_bg)
-                  
-              def _update_bg(self, *args):
-                  self._bg.pos = (self.x + dp(4), self.y + dp(4))
-                  self._bg.size = (self.width - dp(8), self.height - dp(8))
-                  
-              def on_state(self, instance, value):
-                  if value == "down":
-                      self._render_color.rgba = (0, 0, 0, 0.08)
-                  else:
-                      self._render_color.rgba = (0, 0, 0, 0)
+                  <!-- Toolbar -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="56dp"
+                      android:orientation="horizontal"
+                      android:background="@color/white"
+                      android:gravity="center_vertical"
+                      android:elevation="2dp">
 
-          class RoundedInput(TextInput):
-              def __init__(self, **kwargs):
-                  super().__init__(**kwargs)
-                  self.background_color = (0.95, 0.95, 0.96, 1)  
-                  self.background_normal = ""
-                  self.background_active = ""
-                  self.background_disabled_normal = ""
-                  self.cursor_color = COLOR_ACCENT
-                  self.foreground_color = (0.05, 0.05, 0.05, 1)  
-                  self.disabled_foreground_color = (0.5, 0.5, 0.5, 1)
-                  self.hint_text_color = (0.6, 0.6, 0.6, 1)
+                      <ImageButton
+                          android:id="@+id/btn_menu"
+                          android:layout_width="48dp"
+                          android:layout_height="48dp"
+                          android:src="@drawable/ic_menu"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:contentDescription="菜单"
+                          app:tint="@color/black" />
 
-              def on_touch_down(self, touch):
-                  if self.disabled: return False
-                  if self.collide_point(*touch.pos):
-                      self.focus = True
-                  return super().on_touch_down(touch)
+                      <ImageButton
+                          android:id="@+id/btn_font"
+                          android:layout_width="48dp"
+                          android:layout_height="48dp"
+                          android:src="@drawable/ic_font"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:contentDescription="字体"
+                          app:tint="@color/black" />
 
-          class HistoryItem(ButtonBehavior, BoxLayout):
-              def __init__(self, record, app_ref, **kwargs):
-                  super().__init__(**kwargs)
-                  self.record = record
-                  self.app_ref = app_ref
-                  self.orientation = "vertical"
-                  self.size_hint_y = None
-                  self.height = dp(64)
-                  self.padding = [dp(16), dp(12)]
-                  
-                  title_text = record.get("preview", "新对话")
-                  self.lbl = Label(text=title_text, font_name=CJK_FONT, font_size=dp(15),
-                              color=(0.1, 0.1, 0.1, 1), halign="left", valign="middle")
-                  self.lbl.bind(size=lambda inst, val: setattr(self.lbl, "text_size", (val[0]-dp(10), val[1])))
-                  self.add_widget(self.lbl)
-                  
-                  with self.canvas.before:
-                      self._render_color = Color(1, 1, 1, 1)
-                      self._bg = Rectangle(pos=self.pos, size=self.size)
-                  
-                  with self.canvas.after:
-                      Color(*COLOR_TITLE_BORDER)
-                      self.line = Rectangle(pos=(self.x + dp(16), self.y), size=(self.width - dp(32), dp(1)))
-                      
-                  self.bind(pos=self._update_bg, size=self._update_bg)
+                      <TextView
+                          android:id="@+id/tv_title"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="李尔"
+                          android:textSize="18sp"
+                          android:textStyle="bold"
+                          android:textColor="@color/black"
+                          android:gravity="center" />
 
-              def _update_bg(self, *args):
-                  self._bg.pos = self.pos
-                  self._bg.size = self.size
-                  self.line.pos = (self.x + dp(16), self.y)
-                  self.line.size = (self.width - dp(32), dp(1))
+                      <ImageButton
+                          android:id="@+id/btn_new_session"
+                          android:layout_width="48dp"
+                          android:layout_height="48dp"
+                          android:src="@drawable/ic_add"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:contentDescription="新对话"
+                          app:tint="@color/black" />
+                  </LinearLayout>
 
-              def on_state(self, instance, value):
-                  if value == "down":
-                      self._render_color.rgba = (0.95, 0.95, 0.95, 1)
-                  else:
-                      self._render_color.rgba = (1, 1, 1, 1)
+                  <!-- Chat area -->
+                  <androidx.recyclerview.widget.RecyclerView
+                      android:id="@+id/chat_recycler"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:clipToPadding="false"
+                      android:paddingStart="8dp"
+                      android:paddingEnd="8dp"
+                      android:paddingTop="12dp"
+                      android:paddingBottom="12dp"
+                      android:scrollbars="vertical" />
 
-              def on_touch_down(self, touch):
-                  if self.collide_point(*touch.pos):
-                      self._lp = Clock.schedule_once(self._do_long_press, 0.6)
-                  return super().on_touch_down(touch)
+                  <!-- Loading indicator -->
+                  <ProgressBar
+                      android:id="@+id/loading_bar"
+                      style="?android:attr/progressBarStyleHorizontal"
+                      android:layout_width="match_parent"
+                      android:layout_height="3dp"
+                      android:indeterminate="true"
+                      android:visibility="gone"
+                      android:indeterminateTint="@color/accent_blue" />
 
-              def on_touch_up(self, touch):
-                  if hasattr(self, "_lp"): self._lp.cancel()
-                  return super().on_touch_up(touch)
+                  <!-- Input area -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:padding="8dp"
+                      android:background="@color/white"
+                      android:elevation="4dp">
 
-              def on_touch_move(self, touch):
-                  if hasattr(self, "_lp"): self._lp.cancel()
-                  return super().on_touch_move(touch)
+                      <EditText
+                          android:id="@+id/input_message"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:hint="输入消息..."
+                          android:textColorHint="@color/gray_text"
+                          android:background="@drawable/bg_input"
+                          android:paddingStart="14dp"
+                          android:paddingEnd="14dp"
+                          android:paddingTop="10dp"
+                          android:paddingBottom="10dp"
+                          android:textSize="15sp"
+                          android:textColor="@color/black"
+                          android:maxLines="4"
+                          android:inputType="textMultiLine|textCapSentences"
+                          android:imeOptions="actionSend" />
 
-              def _do_long_press(self, dt):
-                  self.app_ref.show_delete_dialog(self.record)
+                      <com.google.android.material.button.MaterialButton
+                          android:id="@+id/btn_send"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:layout_marginStart="8dp"
+                          android:text="发送"
+                          android:textColor="@color/white"
+                          app:backgroundTint="@color/accent_blue"
+                          app:cornerRadius="10dp" />
+                  </LinearLayout>
+              </LinearLayout>
 
-              def on_release(self):
-                  self.app_ref.load_session(self.record)
+              <!-- ── Navigation drawer ── -->
+              <LinearLayout
+                  android:layout_width="300dp"
+                  android:layout_height="match_parent"
+                  android:layout_gravity="start"
+                  android:orientation="vertical"
+                  android:background="@color/white"
+                  android:fitsSystemWindows="true">
 
-          class ChatBubble(Label):
-              def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
-                  super().__init__(**kwargs)
-                  self.text = text
-                  self.is_user = is_user
-                  self.is_error = is_error
-                  self.font_name = CJK_FONT
-                  self.font_size = dp(font_size) if not is_error else dp(font_size - 2)
-                  
-                  self.size_hint = (None, None)
-                  self.halign = "left"
-                  self.valign = "top" 
-                  self.color = COLOR_USER_FG if is_user else COLOR_BOT_FG
-                  
-                  bg = COLOR_ERROR_BG if is_error else (COLOR_USER_BG if is_user else COLOR_BOT_BG)
-                  with self.canvas.before:
-                      Color(*bg)
-                      if is_user:
-                          rad = [dp(18), dp(18), dp(4), dp(18)]
-                      else:
-                          rad = [dp(18), dp(18), dp(18), dp(4)]
-                      self._bg = RoundedRectangle(radius=rad)
-                  
-                  self.bind(pos=self._update_bg, size=self._update_bg)
-                  Clock.schedule_once(self._calc_tight_size, 0)
-                  
-              def _calc_tight_size(self, dt):
-                  self.text_size = (None, None)
-                  self.texture_update()
-                  
-                  max_w = Window.width * 0.72
-                  
-                  if self.texture_size[0] > max_w or '\n' in self.text:
-                      if getattr(self, "_last_wrap_width", None) != max_w:
-                          self._last_wrap_width = max_w
-                          self.text_size = (max_w, None)
-                          self.texture_update()
-                  
-                  self.text_size = (self.texture_size[0], self.texture_size[1])
-                  self.size = (self.texture_size[0] + dp(28), self.texture_size[1] + dp(20))
-                  
-              def _update_bg(self, *args):
-                  self._bg.pos = self.pos
-                  self._bg.size = self.size
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:padding="16dp"
+                      android:text="最近对话"
+                      android:textSize="18sp"
+                      android:textStyle="bold"
+                      android:textColor="@color/black" />
 
-          class MessageRow(BoxLayout):
-              def __init__(self, text, is_user=False, is_error=False, font_size=14, **kwargs):
-                  super().__init__(**kwargs)
-                  self.orientation = "horizontal"
-                  self.size_hint_y = None
-                  self.spacing = dp(8)
-                  self.padding = (dp(12), dp(4))
-                  
-                  self.bubble = ChatBubble(text, is_user=is_user, is_error=is_error, font_size=font_size)
-                  spacer = BoxLayout(size_hint_x=1)
-                  avatar_spacer = BoxLayout(size_hint_x=None, width=dp(5)) 
-                  
-                  if is_user:
-                      self.add_widget(spacer)
-                      self.add_widget(self.bubble)
-                      self.add_widget(avatar_spacer)
-                  else:
-                      self.add_widget(avatar_spacer)
-                      self.add_widget(self.bubble)
-                      self.add_widget(spacer)
-                      
-                  self.bubble.bind(height=self._update_height)
-                  
-              def _update_height(self, inst, val):
-                  self.height = val + dp(8)
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="@color/border_gray" />
 
-          class ChatApp(App):
-              chat_font_size = NumericProperty(14)
+                  <androidx.recyclerview.widget.RecyclerView
+                      android:id="@+id/history_recycler"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1" />
 
-              def __init__(self, **kwargs):
-                  super().__init__(**kwargs)
-                  self.chatbot_module = None
-                  self.is_ready = True 
-                  self.session_id = None
-                  self.is_processing = False
-                  self.histories = []
-                  self.current_record = {"id": None, "preview": "新对话", "messages": []}
-                  
-                  self._stagger_load_index = 0
-                  self._stagger_messages = []
-                  self.load_settings()
+                  <com.google.android.material.button.MaterialButton
+                      android:id="@+id/btn_clear_all"
+                      android:layout_width="match_parent"
+                      android:layout_height="52dp"
+                      android:text="清空所有记录"
+                      android:textColor="@color/white"
+                      android:insetTop="0dp"
+                      android:insetBottom="0dp"
+                      app:backgroundTint="@color/error_red"
+                      app:cornerRadius="0dp" />
+              </LinearLayout>
+          </androidx.drawerlayout.widget.DrawerLayout>
+          XML_EOF
 
-              def load_settings(self):
-                  try:
-                      if os.path.exists(SETTINGS_FILE):
-                          with open(SETTINGS_FILE, "r") as f:
-                              self.chat_font_size = json.load(f).get("font_size", 14)
-                  except: pass
+          # ── Drawables ──
+          cat > app/src/main/res/drawable/bg_input.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="@color/input_bg" />
+              <corners android:radius="14dp" />
+          </shape>
+          XML_EOF
 
-              def save_settings(self):
-                  try:
-                      with open(SETTINGS_FILE, "w") as f:
-                          json.dump({"font_size": self.chat_font_size}, f)
-                  except: pass
+          cat > app/src/main/res/drawable/bg_bubble_user.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="@color/user_bubble" />
+              <corners android:topLeftRadius="18dp" android:topRightRadius="18dp"
+                       android:bottomLeftRadius="4dp" android:bottomRightRadius="18dp" />
+          </shape>
+          XML_EOF
 
-              def on_chat_font_size(self, instance, value):
-                  self.save_settings()
-                  if hasattr(self, "text_input"):
-                      self.text_input.font_size = dp(value + 1)
+          cat > app/src/main/res/drawable/bg_bubble_bot.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="@color/bot_bubble" />
+              <corners android:topLeftRadius="18dp" android:topRightRadius="18dp"
+                       android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" />
+          </shape>
+          XML_EOF
 
-              def build(self):
-                  self.load_all_history()
-                  self.root = FloatLayout()
+          cat > app/src/main/res/drawable/bg_bubble_error.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="@color/error_red" />
+              <corners android:topLeftRadius="18dp" android:topRightRadius="18dp"
+                       android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" />
+          </shape>
+          XML_EOF
 
-                  main_layout = BoxLayout(orientation="vertical", size_hint=(1, 1))
-                  
-                  title_bar = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(48))
-                  with title_bar.canvas.before:
-                      Color(*COLOR_TITLE_BG)
-                      title_bar._bg = Rectangle(pos=title_bar.pos, size=title_bar.size)
-                      Color(*COLOR_TITLE_BORDER)
-                      title_bar._line = Rectangle(pos=(title_bar.x, title_bar.y), size=(title_bar.width, dp(1)))
-                  def update_title_bg(*args):
-                      title_bar._bg.pos = title_bar.pos
-                      title_bar._bg.size = title_bar.size
-                      title_bar._line.pos = (title_bar.x, title_bar.y)
-                      title_bar._line.size = (title_bar.width, dp(1))
-                  title_bar.bind(pos=update_title_bg, size=update_title_bg)
-                  
-                  left_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(4), dp(0)])
-                  menu_btn = MenuButton()
-                  menu_btn.bind(on_release=self.open_drawer)
-                  font_btn = TopBarButton(text="Aa", font_name=CJK_FONT, font_size=dp(16), size_hint=(None, 1), width=dp(50))
-                  font_btn.bind(on_release=self.show_font_settings)
-                  left_box.add_widget(menu_btn)
-                  left_box.add_widget(font_btn)
-                  
-                  self.title_lbl = Label(text="李尔", font_name=CJK_FONT, font_size=dp(16), bold=True, color=COLOR_TITLE_FG)
-                  
-                  right_box = BoxLayout(size_hint=(None, 1), width=dp(110), padding=[dp(0), dp(0), dp(4), dp(0)])
-                  right_box.add_widget(Label(size_hint=(1, 1)))
-                  new_btn = TopBarButton(text="+", font_name=CJK_FONT, font_size=dp(28), size_hint=(None, 1), width=dp(50))
-                  new_btn.bind(on_release=lambda x: self.start_new_session())
-                  right_box.add_widget(new_btn)
-                  
-                  title_bar.add_widget(left_box)
-                  title_bar.add_widget(self.title_lbl)
-                  title_bar.add_widget(right_box)
-                  main_layout.add_widget(title_bar)
+          cat > app/src/main/res/drawable/ic_menu.xml << 'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FF000000"
+                  android:pathData="M3,18h18v-2H3v2zM3,13h18v-2H3v2zM3,6v2h18V6H3z" />
+          </vector>
+          XML_EOF
 
-                  self.scroll = ScrollView(
-                      size_hint=(1, 1), 
-                      scroll_type=['bars', 'content'], 
-                      bar_width=dp(6),
-                      bar_color=(0.6, 0.6, 0.6, 0.8),
-                      bar_inactive_color=(0.6, 0.6, 0.6, 0.3)
-                  )
-                  
-                  self.chat_container = FloatLayout(size_hint_y=None)
-                  self.chat_layout = BoxLayout(orientation="vertical", size_hint_y=None, pos_hint={'top': 1}, spacing=dp(10), padding=[dp(8), dp(16), dp(8), dp(16)])
-                  self.chat_layout.bind(minimum_height=self.chat_layout.setter('height'))
-                  
-                  def update_container_height(*args):
-                      self.chat_container.height = max(self.chat_layout.height, self.scroll.height)
-                      
-                  self.chat_layout.bind(height=update_container_height)
-                  self.scroll.bind(height=update_container_height)
-                  
-                  self.chat_container.add_widget(self.chat_layout)
-                  self.scroll.add_widget(self.chat_container)
-                  main_layout.add_widget(self.scroll)
+          cat > app/src/main/res/drawable/ic_add.xml << 'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FF000000"
+                  android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+          </vector>
+          XML_EOF
 
-                  input_area = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(60), spacing=dp(10), padding=[dp(12), dp(10), dp(12), dp(10)])
-                  with input_area.canvas.before:
-                      Color(*COLOR_TITLE_BG)
-                      input_area._bg = Rectangle(pos=input_area.pos, size=input_area.size)
-                      Color(*COLOR_TITLE_BORDER)
-                      input_area._line = Rectangle(pos=(input_area.x, input_area.top-1), size=(input_area.width, dp(1)))
-                  def update_input_bg(*args):
-                      input_area._bg.pos = input_area.pos
-                      input_area._bg.size = input_area.size
-                      input_area._line.pos = (input_area.x, input_area.top-1)
-                      input_area._line.size = (input_area.width, dp(1))
-                  input_area.bind(pos=update_input_bg, size=update_input_bg)
-                  
-                  self.text_input = RoundedInput(hint_text="输入消息...", font_name=CJK_FONT, font_size=dp(self.chat_font_size + 1), multiline=True, size_hint=(1, 1), padding=[dp(14), dp(10)])
-                  input_area.add_widget(self.text_input)
-                  
-                  self.send_btn = ModernButton(text="发送", font_name=CJK_FONT, font_size=dp(14), size_hint=(None, 1), width=dp(68), bg_color=COLOR_ACCENT)
-                  self.send_btn.bind(on_release=self.send_message)
-                  input_area.add_widget(self.send_btn)
-                  main_layout.add_widget(input_area)
-                  
-                  self.root.add_widget(main_layout)
+          cat > app/src/main/res/drawable/ic_font.xml << 'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FF000000"
+                  android:pathData="M9.93,13.5h4.03L12,7.5L9.93,13.5zM12,2L2,12h3v8h14v-8h3L12,2zM14.5,16.5h-5L8.7,19H6.8l4.5,-11h1.4l4.5,11h-1.9L14.5,16.5z" />
+          </vector>
+          XML_EOF
 
-                  self.overlay = Button(background_color=(0,0,0,1), opacity=0, size_hint=(1, 1), pos_hint={"x": 2, "y": 0})
-                  self.overlay.bind(on_release=self.close_drawer)
-                  self.root.add_widget(self.overlay)
+          # ── Adaptive launcher icon (API 26+) ──
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_bg" />
+              <foreground android:drawable="@drawable/ic_launcher_fg" />
+          </adaptive-icon>
+          XML_EOF
 
-                  self.drawer = BoxLayout(orientation="vertical", size_hint=(0.7, 1), pos_hint={"x": -0.7, "y": 0})
-                  with self.drawer.canvas.before:
-                      Color(*COLOR_TITLE_BG)
-                      self.drawer._bg = Rectangle(pos=self.drawer.pos, size=self.drawer.size)
-                  self.drawer.bind(pos=lambda inst, val: setattr(self.drawer._bg, "pos", val), size=lambda inst, val: setattr(self.drawer._bg, "size", val))
+          cat > app/src/main/res/drawable/ic_launcher_bg.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="#007AFF" />
+          </shape>
+          XML_EOF
 
-                  drawer_title = Label(text="最近对话", font_name=CJK_FONT, font_size=dp(18), bold=True, color=COLOR_TITLE_FG, size_hint=(1, None), height=dp(50))
-                  with drawer_title.canvas.before:
-                      Color(*COLOR_TITLE_BG)
-                      drawer_title._bg = Rectangle(pos=drawer_title.pos, size=drawer_title.size)
-                      Color(*COLOR_TITLE_BORDER)
-                      drawer_title._line = Rectangle(pos=(drawer_title.x, drawer_title.y), size=(drawer_title.width, dp(1)))
-                  def update_dt_bg(*args):
-                      drawer_title._bg.pos = drawer_title.pos
-                      drawer_title._bg.size = drawer_title.size
-                      drawer_title._line.pos = (drawer_title.x, drawer_title.y)
-                      drawer_title._line.size = (drawer_title.width, dp(1))
-                  drawer_title.bind(pos=update_dt_bg, size=update_dt_bg)
-                  self.drawer.add_widget(drawer_title)
+          cat > app/src/main/res/drawable/ic_launcher_fg.xml << 'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M54,38 C42,38 32,45 32,54 C32,63 42,70 54,70 C57,70 60,69.5 63,68.5 L72,72 L69,63 C72.5,60.5 76,57.5 76,54 C76,45 66,38 54,38 Z" />
+          </vector>
+          XML_EOF
 
-                  drawer_scroll = ScrollView(size_hint=(1, 1))
-                  self.sidebar_layout = BoxLayout(orientation="vertical", size_hint_y=None)
-                  self.sidebar_layout.bind(minimum_height=self.sidebar_layout.setter("height"))
-                  drawer_scroll.add_widget(self.sidebar_layout)
-                  self.drawer.add_widget(drawer_scroll)
+          # ── MainActivity.kt ──
+          cat > app/src/main/java/com/lear/chatbot/MainActivity.kt << 'KT_EOF'
+          package com.lear.chatbot
 
-                  clear_btn = ModernButton(text="清空所有记录", font_name=CJK_FONT, font_size=dp(15), size_hint=(1, None), height=dp(50), corner_radius=0, bg_color=COLOR_ERROR_BG)
-                  clear_btn.bind(on_release=self.show_clear_all_dialog)
-                  self.drawer.add_widget(clear_btn)
+          import android.os.Bundle
+          import android.text.Editable
+          import android.text.TextWatcher
+          import android.view.Gravity
+          import android.view.LayoutInflater
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.inputmethod.InputMethodManager
+          import android.widget.EditText
+          import android.widget.ImageButton
+          import android.widget.LinearLayout
+          import android.widget.ProgressBar
+          import android.widget.SeekBar
+          import android.widget.TextView
+          import android.widget.Toast
+          import androidx.appcompat.app.AlertDialog
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.content.ContextCompat
+          import androidx.lifecycle.lifecycleScope
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+          import androidx.drawerlayout.widget.DrawerLayout
+          import com.chaquo.python.Python
+          import com.chaquo.python.android.AndroidPlatform
+          import com.google.android.material.button.MaterialButton
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.io.File
 
-                  self.root.add_widget(self.drawer)
-                  self.refresh_sidebar()
+          // ═══════════════════════════════════════════════════════════
+          //  Data classes
+          // ═══════════════════════════════════════════════════════════
 
-                  threading.Thread(target=self._load_backend_thread, daemon=True).start()
-                  return self.root
+          data class ChatMessage(
+              val text: String,
+              val isUser: Boolean,
+              val isError: Boolean = false,
+              val isSystem: Boolean = false
+          )
 
-              def _check_and_render_message(self, text, is_user=False, target_record=None):
-                  """核心渲染器：拦截系统提示进行特殊渲染，并判断是否锁定输入框"""
-                  if not text: return
-                  
-                  is_sys_msg = text.startswith("【") and text.endswith("】")
-                  
-                  if is_sys_msg:
-                      self.chat_layout.add_widget(SystemMessageRow(text, font_size=self.chat_font_size - 2))
-                      # 只要该会话的最后一条是系统终止消息，就自动禁用输入框
-                      if target_record and self.current_record == target_record:
-                          self.send_btn.set_disabled(True)
-                          self.text_input.disabled = True
-                          self.text_input.hint_text = "会话已结束"
-                  else:
-                      self.chat_layout.add_widget(MessageRow(text, is_user=is_user, font_size=self.chat_font_size))
+          data class ChatSession(
+              var id: String? = null,
+              var preview: String = "新对话",
+              val messages: MutableList<ChatMessage> = mutableListOf()
+          )
 
-              def _load_backend_thread(self):
-                  try:
-                      import lear_main as 李尔
-                      self.chatbot_module = 李尔
-                      result = self.chatbot_module.web_start_session()
-                      self.session_id = result.get("session_id")
-                      Clock.schedule_once(lambda dt: self._on_backend_ready(result))
-                  except Exception as e:
-                      pass
+          // ═══════════════════════════════════════════════════════════
+          //  Main Activity
+          // ═══════════════════════════════════════════════════════════
 
-              @mainthread
-              def _on_backend_ready(self, initial_result):
-                  if not self.current_record.get("id"):
-                      self.current_record["id"] = self.session_id
-                  msgs = initial_result.get("messages", [])
-                  if msgs:
-                      for reply in msgs:
-                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
-                          self.current_record["messages"].append({"is_user": False, "text": clean_reply})
+          class MainActivity : AppCompatActivity() {
 
-              def show_font_settings(self, *args):
-                  content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(15))
-                  lbl = Label(text=f"当前字号: {int(self.chat_font_size)}", font_name=CJK_FONT, color=(1,1,1,1), size_hint_y=None, height=dp(30))
-                  slider = Slider(min=10, max=24, step=1, value=self.chat_font_size)
-                  def on_slider_val(inst, val):
-                      self.chat_font_size = val
-                      lbl.text = f"当前字号: {int(val)}"
-                  slider.bind(value=on_slider_val)
-                  btn_box = BoxLayout(size_hint_y=None, height=dp(40))
-                  btn_close = ModernButton(text="完成", font_name=CJK_FONT, bg_color=COLOR_ACCENT)
-                  btn_box.add_widget(btn_close)
-                  content.add_widget(lbl)
-                  content.add_widget(slider)
-                  content.add_widget(btn_box)
-                  popup = Popup(title="调节字体大小", title_font=CJK_FONT, content=content, size_hint=(0.85, 0.35), auto_dismiss=True)
-                  btn_close.bind(on_release=popup.dismiss)
-                  popup.open()
+              // UI
+              private lateinit var drawerLayout: DrawerLayout
+              private lateinit var chatRecycler: RecyclerView
+              private lateinit var historyRecycler: RecyclerView
+              private lateinit var inputMessage: EditText
+              private lateinit var btnSend: MaterialButton
+              private lateinit var btnClearAll: MaterialButton
+              private lateinit var btnNewSession: ImageButton
+              private lateinit var btnFontSize: ImageButton
+              private lateinit var btnMenu: ImageButton
+              private lateinit var loadingBar: ProgressBar
 
-              def show_delete_dialog(self, record):
-                  content = BoxLayout(orientation="vertical", spacing=dp(15), padding=dp(15))
-                  content.add_widget(Label(text="是否删除此记录？", font_name=CJK_FONT, color=(1,1,1,1)))
-                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(15))
-                  btn_yes = ModernButton(text="删除", font_name=CJK_FONT, bg_color=COLOR_ERROR_BG)
-                  btn_no = ModernButton(text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1))
-                  btn_box.add_widget(btn_yes)
-                  btn_box.add_widget(btn_no)
-                  content.add_widget(btn_box)
-                  popup = Popup(title="提示", title_font=CJK_FONT, content=content, size_hint=(0.8, 0.28), auto_dismiss=False)
-                  btn_yes.bind(on_release=lambda x: self.delete_history(record, popup))
-                  btn_no.bind(on_release=popup.dismiss)
-                  popup.open()
+              // Adapters
+              private val chatAdapter = ChatAdapter()
+              private val historyAdapter = HistoryAdapter()
 
-              def show_clear_all_dialog(self, *args):
-                  content = BoxLayout(orientation="vertical", spacing=dp(15), padding=dp(15))
-                  content.add_widget(Label(text="确认清空所有聊天记录？", font_name=CJK_FONT, color=(1,1,1,1)))
-                  btn_box = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(15))
-                  btn_yes = ModernButton(text="清空", font_name=CJK_FONT, bg_color=COLOR_ERROR_BG)
-                  btn_no = ModernButton(text="取消", font_name=CJK_FONT, bg_color=(0.5, 0.5, 0.5, 1))
-                  btn_box.add_widget(btn_yes)
-                  btn_box.add_widget(btn_no)
-                  content.add_widget(btn_box)
-                  popup = Popup(title="警告", title_font=CJK_FONT, content=content, size_hint=(0.8, 0.28), auto_dismiss=False)
-                  btn_yes.bind(on_release=lambda x: self.clear_all_history(popup))
-                  btn_no.bind(on_release=popup.dismiss)
-                  popup.open()
+              // State
+              private val histories = mutableListOf<ChatSession>()
+              private var currentSession = ChatSession()
+              private var isProcessing = false
+              private var chatFontSize = 14
 
-              def save_all_history(self):
-                  try:
-                      valid_histories = [h for h in self.histories if any(m.get("is_user") for m in h.get("messages", []))]
-                      with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                          json.dump(valid_histories[:15], f, ensure_ascii=False)
-                  except: pass
+              // Python
+              private var bootstrapModule: com.chaquo.python.PyObject? = null
 
-              def refresh_sidebar(self):
-                  self.sidebar_layout.clear_widgets()
-                  for record in self.histories:
-                      if any(m.get("is_user") for m in record.get("messages", [])):
-                          self.sidebar_layout.add_widget(HistoryItem(record, self))
+              // Files
+              private val historyFile by lazy { File(filesDir, "chat_history.json") }
+              private val settingsFile by lazy { File(filesDir, "settings.json") }
 
-              def load_all_history(self):
-                  try:
-                      if os.path.exists(HISTORY_FILE):
-                          with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                              self.histories = json.load(f)
-                  except: self.histories = []
+              // ───────────────────────────────────────────
+              //  Lifecycle
+              // ───────────────────────────────────────────
 
-              def open_drawer(self, *args):
-                  self.text_input.focus = False
-                  self.overlay.pos_hint = {"x": 0, "y": 0}
-                  Animation(opacity=0.3, d=0.25, t="out_quad").start(self.overlay)
-                  Animation(pos_hint={"x": 0}, d=0.25, t="out_quad").start(self.drawer)
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
 
-              def close_drawer(self, *args):
-                  anim = Animation(opacity=0, d=0.2)
-                  anim.bind(on_complete=lambda *a: setattr(self.overlay, "pos_hint", {"x": 2, "y": 0}))
-                  anim.start(self.overlay)
-                  Animation(pos_hint={"x": -0.7}, d=0.2, t="in_quad").start(self.drawer)
+                  bindViews()
+                  setupListeners()
+                  setupRecyclerViews()
 
-              def load_session(self, record):
-                  self.close_drawer()
-                  if record == self.current_record: return
-                  self.current_record = record
-                  self.session_id = record.get("id")
-                  self.chat_layout.clear_widgets()
-                  self.is_processing = False
-                  
-                  self.send_btn.set_disabled(False)
-                  self.text_input.disabled = False
-                  self.text_input.hint_text = "输入消息..."
-                  
-                  messages = record.get("messages", [])[-60:]
-                  self._stagger_load_index = 0
-                  self._stagger_messages = messages
-                  
-                  if messages:
-                      Clock.schedule_once(self._staggered_load_step, 0)
-                  else:
-                      self._scroll_to_bottom()
-                      
-                  if record in self.histories:
-                      self.histories.remove(record)
-                  self.histories.insert(0, record)
-                  self.save_all_history()
-                  self.refresh_sidebar()
+                  loadSettings()
+                  loadAllHistory()
+                  refreshHistory()
 
-              def _staggered_load_step(self, dt):
-                  if self._stagger_load_index >= len(self._stagger_messages):
-                      self._scroll_to_bottom()
+                  initPython()
+              }
+
+              private fun bindViews() {
+                  drawerLayout = findViewById(R.id.drawer_layout)
+                  chatRecycler = findViewById(R.id.chat_recycler)
+                  historyRecycler = findViewById(R.id.history_recycler)
+                  inputMessage = findViewById(R.id.input_message)
+                  btnSend = findViewById(R.id.btn_send)
+                  btnClearAll = findViewById(R.id.btn_clear_all)
+                  btnNewSession = findViewById(R.id.btn_new_session)
+                  btnFontSize = findViewById(R.id.btn_font)
+                  btnMenu = findViewById(R.id.btn_menu)
+                  loadingBar = findViewById(R.id.loading_bar)
+              }
+
+              private fun setupListeners() {
+                  btnMenu.setOnClickListener {
+                      drawerLayout.openDrawer(Gravity.START)
+                  }
+                  btnFontSize.setOnClickListener { showFontSizeDialog() }
+                  btnNewSession.setOnClickListener { startNewSession() }
+                  btnSend.setOnClickListener { sendMessage() }
+                  btnClearAll.setOnClickListener { showClearAllDialog() }
+
+                  inputMessage.addTextChangedListener(object : TextWatcher {
+                      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                      override fun afterTextChanged(s: Editable?) {
+                          btnSend.isEnabled = !s.isNullOrBlank() && !isProcessing
+                      }
+                  })
+              }
+
+              private fun setupRecyclerViews() {
+                  chatRecycler.layoutManager = LinearLayoutManager(this).apply {
+                      stackFromEnd = true
+                  }
+                  chatRecycler.adapter = chatAdapter
+                  chatAdapter.fontSize = chatFontSize
+
+                  historyRecycler.layoutManager = LinearLayoutManager(this)
+                  historyRecycler.adapter = historyAdapter
+                  historyAdapter.onItemClick = { session -> loadSession(session) }
+                  historyAdapter.onItemLongClick = { session -> showDeleteDialog(session) }
+              }
+
+              // ───────────────────────────────────────────
+              //  Python initialization
+              // ───────────────────────────────────────────
+
+              private fun initPython() {
+                  loadingBar.visibility = View.VISIBLE
+                  btnSend.isEnabled = false
+                  inputMessage.hint = "正在初始化..."
+
+                  lifecycleScope.launch {
+                      try {
+                          withContext(Dispatchers.IO) {
+                              if (!Python.isStarted()) {
+                                  Python.start(AndroidPlatform(this@MainActivity))
+                              }
+                              val py = Python.getInstance()
+                              bootstrapModule = py.getModule("bootstrap")
+                              val result = bootstrapModule?.callAttr("web_start_session")
+                              val resultMap = result?.asMap()
+                              val sid = resultMap?.get("session_id")?.toString()
+                              val msgs = (resultMap?.get("messages") as? com.chaquo.python.PyObject)?.asList()
+
+                              withContext(Dispatchers.Main) {
+                                  currentSession.id = sid
+                                  msgs?.forEach { msg ->
+                                      val text = cleanText(msg.toString())
+                                      val isSys = isSystemMessage(text)
+                                      val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
+                                      currentSession.messages.add(chatMsg)
+                                      chatAdapter.addMessage(chatMsg)
+                                  }
+                                  scrollToBottom()
+                                  loadingBar.visibility = View.GONE
+                                  btnSend.isEnabled = true
+                                  inputMessage.hint = "输入消息..."
+                                  checkSystemMessageLock()
+                              }
+                          }
+                      } catch (e: Exception) {
+                          withContext(Dispatchers.Main) {
+                              loadingBar.visibility = View.GONE
+                              inputMessage.hint = "初始化失败"
+                              Toast.makeText(this@MainActivity, "Python初始化失败: ${e.message}", Toast.LENGTH_LONG).show()
+                          }
+                      }
+                  }
+              }
+
+              // ───────────────────────────────────────────
+              //  Send message
+              // ───────────────────────────────────────────
+
+              private fun sendMessage() {
+                  if (isProcessing || bootstrapModule == null) return
+                  val text = inputMessage.text.toString().trim()
+                  if (text.isEmpty()) return
+
+                  // First message → set preview
+                  val isFirst = currentSession.messages.none { it.isUser }
+                  if (isFirst) {
+                      currentSession.preview = if (text.length > 12) text.substring(0, 12) + "..." else text
+                      if (currentSession !in histories) histories.add(0, currentSession)
+                  }
+
+                  // Add user message
+                  val userMsg = ChatMessage(text, isUser = true)
+                  currentSession.messages.add(userMsg)
+                  chatAdapter.addMessage(userMsg)
+                  scrollToBottom()
+                  saveAllHistory()
+                  refreshHistory()
+
+                  // Clear input
+                  inputMessage.text.clear()
+                  val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                  imm.hideSoftInputFromWindow(inputMessage.windowToken, 0)
+
+                  // Processing state
+                  isProcessing = true
+                  btnSend.text = "发送中"
+                  btnSend.isEnabled = false
+                  loadingBar.visibility = View.VISIBLE
+
+                  val sid = currentSession.id
+                  lifecycleScope.launch {
+                      try {
+                          val (replies, newSid) = withContext(Dispatchers.IO) {
+                              val result = bootstrapModule?.callAttr("web_process_message", text, sid)
+                              val resultMap = result?.asMap()
+                              val nsid = resultMap?.get("session_id")?.toString()
+                              val reps = (resultMap?.get("replies") as? com.chaquo.python.PyObject)?.asList()
+                              Pair(reps, nsid)
+                          }
+                          if (newSid != null) currentSession.id = newSid
+
+                          replies?.forEach { reply ->
+                              val cleanReply = cleanText(reply.toString())
+                              val isSys = isSystemMessage(cleanReply)
+                              val botMsg = ChatMessage(cleanReply, isUser = false, isSystem = isSys)
+                              currentSession.messages.add(botMsg)
+                              chatAdapter.addMessage(botMsg)
+                          }
+                          scrollToBottom()
+                          saveAllHistory()
+                          refreshHistory()
+                          checkSystemMessageLock()
+                      } catch (e: Exception) {
+                          val errorMsg = ChatMessage("【处理异常】请重试: ${e.message}", isUser = false, isError = true)
+                          currentSession.messages.add(errorMsg)
+                          chatAdapter.addMessage(errorMsg)
+                          scrollToBottom()
+                      } finally {
+                          isProcessing = false
+                          btnSend.text = "发送"
+                          btnSend.isEnabled = inputMessage.text.isNotBlank()
+                          loadingBar.visibility = View.GONE
+                      }
+                  }
+              }
+
+              // ───────────────────────────────────────────
+              //  Session management
+              // ───────────────────────────────────────────
+
+              private fun startNewSession() {
+                  if (currentSession.messages.isEmpty()) {
+                      drawerLayout.closeDrawer(Gravity.START)
                       return
-                  for _ in range(2):
-                      if self._stagger_load_index >= len(self._stagger_messages): break
-                      m = self._stagger_messages[self._stagger_load_index]
-                      self._check_and_render_message(m["text"], is_user=m.get("is_user"), target_record=self.current_record)
-                      self._stagger_load_index += 1
-                  Clock.schedule_once(self._staggered_load_step, 0)
+                  }
+                  chatAdapter.clearMessages()
+                  currentSession = ChatSession()
+                  isProcessing = false
+                  btnSend.text = "发送"
+                  btnSend.isEnabled = true
+                  inputMessage.isEnabled = true
+                  inputMessage.hint = "输入消息..."
+                  drawerLayout.closeDrawer(Gravity.START)
 
-              def delete_history(self, record, popup):
-                  if record in self.histories:
-                      self.histories.remove(record)
-                  self.save_all_history()
-                  self.refresh_sidebar()
-                  popup.dismiss()
-                  if self.current_record == record:
-                      self.start_new_session(force=True)
+                  if (bootstrapModule == null) return
+                  loadingBar.visibility = View.VISIBLE
+                  btnSend.isEnabled = false
+                  inputMessage.hint = "正在初始化..."
 
-              def clear_all_history(self, popup):
-                  popup.dismiss()
-                  self.close_drawer()
-                  self.histories = []
-                  self.save_all_history()
-                  self.chat_layout.clear_widgets()
-                  self.current_record = {"id": None, "preview": "新对话", "messages": []}
-                  self.session_id = None
-                  self.refresh_sidebar()
+                  lifecycleScope.launch {
+                      try {
+                          withContext(Dispatchers.IO) {
+                              val result = bootstrapModule?.callAttr("web_start_session")
+                              val resultMap = result?.asMap()
+                              val sid = resultMap?.get("session_id")?.toString()
+                              val msgs = (resultMap?.get("messages") as? com.chaquo.python.PyObject)?.asList()
+                              withContext(Dispatchers.Main) {
+                                  currentSession.id = sid
+                                  msgs?.forEach { msg ->
+                                      val text = cleanText(msg.toString())
+                                      val isSys = isSystemMessage(text)
+                                      val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
+                                      currentSession.messages.add(chatMsg)
+                                      chatAdapter.addMessage(chatMsg)
+                                  }
+                                  scrollToBottom()
+                                  loadingBar.visibility = View.GONE
+                                  btnSend.isEnabled = true
+                                  inputMessage.hint = "输入消息..."
+                                  checkSystemMessageLock()
+                              }
+                          }
+                      } catch (e: Exception) {
+                          withContext(Dispatchers.Main) {
+                              loadingBar.visibility = View.GONE
+                              Toast.makeText(this@MainActivity, "初始化失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }
+              }
 
-              def start_new_session(self, force=False):
-                  if not force and len(self.current_record.get("messages", [])) == 0:
-                      self.close_drawer()
-                      return 
-                  self.chat_layout.clear_widgets()
-                  self.current_record = {"id": None, "preview": "新对话", "messages": []}
-                  self.session_id = None
-                  self.is_processing = False
-                  
-                  self.send_btn.text = "发送"
-                  self.send_btn.set_disabled(False)
-                  self.text_input.disabled = False
-                  self.text_input.hint_text = "输入消息..."
-                  
-                  self.close_drawer()
-                  
-                  if not self.is_ready: return
-                  threading.Thread(target=self._new_session_thread, daemon=True).start()
+              private fun loadSession(session: ChatSession) {
+                  drawerLayout.closeDrawer(Gravity.START)
+                  if (session === currentSession) return
+                  currentSession = session
+                  chatAdapter.clearMessages()
+                  isProcessing = false
+                  btnSend.text = "发送"
+                  btnSend.isEnabled = true
+                  inputMessage.isEnabled = true
+                  inputMessage.hint = "输入消息..."
 
-              def _new_session_thread(self):
-                  try:
-                      result = self.chatbot_module.web_start_session()
-                      self.session_id = result.get("session_id")
-                      self.current_record["id"] = self.session_id
-                      Clock.schedule_once(lambda dt: self._on_new_session_success(result.get("messages", [])))
-                  except Exception as e:
-                      pass
+                  session.messages.forEach { chatAdapter.addMessage(it) }
+                  scrollToBottom()
+                  histories.remove(session)
+                  histories.add(0, session)
+                  saveAllHistory()
+                  refreshHistory()
+                  checkSystemMessageLock()
+              }
 
-              @mainthread
-              def _on_new_session_success(self, msgs):
-                  if msgs:
-                      for reply in msgs:
-                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
-                          self.current_record["messages"].append({"is_user": False, "text": clean_reply})
+              private fun deleteSession(session: ChatSession) {
+                  histories.remove(session)
+                  saveAllHistory()
+                  refreshHistory()
+                  if (currentSession === session) startNewSession()
+              }
 
-              def _scroll_to_bottom(self):
-                  Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
+              // ───────────────────────────────────────────
+              //  System message lock
+              // ───────────────────────────────────────────
 
-              def send_message(self, instance):
-                  if not self.is_ready or self.is_processing: return
-                  text = strip_unsupported_emoticons((self.text_input.text or "").strip())
-                  if not text: return
-                  
-                  is_first_message = not any(m.get("is_user") for m in self.current_record.get("messages", []))
-                  if is_first_message:
-                      self.current_record["preview"] = (text[:12] + "...") if len(text) > 12 else text
-                      if self.current_record not in self.histories:
-                          self.histories.insert(0, self.current_record)
+              private fun isSystemMessage(text: String): Boolean {
+                  return text.startsWith("【") && text.endsWith("】")
+              }
 
-                  self._check_and_render_message(text, is_user=True, target_record=self.current_record)
-                  self.current_record["messages"].append({"is_user": True, "text": text})
-                  self._scroll_to_bottom()
-                  self.save_all_history()
-                  self.refresh_sidebar()
+              private fun checkSystemMessageLock() {
+                  val lastMsg = currentSession.messages.lastOrNull()
+                  if (lastMsg != null && lastMsg.isSystem) {
+                      btnSend.isEnabled = false
+                      inputMessage.isEnabled = false
+                      inputMessage.hint = "会话已结束"
+                  } else {
+                      inputMessage.isEnabled = true
+                      if (inputMessage.hint == "会话已结束") inputMessage.hint = "输入消息..."
+                  }
+              }
 
-                  self.text_input.text = ""
-                  self.text_input.focus = False
-                  self.is_processing = True
-                  self.send_btn.text = "发送中"
-                  self.send_btn.set_disabled(True)
-                  
-                  threading.Thread(target=self._process_message_thread, args=(text, self.current_record), daemon=True).start()
+              // ───────────────────────────────────────────
+              //  Dialogs
+              // ───────────────────────────────────────────
 
-              def _process_message_thread(self, text, target_record):
-                  try:
-                      req_session_id = target_record.get("id")
-                      result = self.chatbot_module.web_process_message(text, req_session_id)
-                      replies = result.get("replies", [])
-                      new_session_id = result.get("session_id")
-                      Clock.schedule_once(lambda dt: self._on_message_success(replies, target_record, new_session_id))
-                  except Exception as e:
-                      err = traceback.format_exc()
-                      Clock.schedule_once(lambda dt: self._on_message_error(err, target_record))
+              private fun showFontSizeDialog() {
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 32, 48, 16)
+                  }
+                  val label = TextView(this).apply {
+                      text = "当前字号: $chatFontSize"
+                      setPadding(0, 0, 0, 24)
+                      textSize = 16f
+                  }
+                  val slider = SeekBar(this).apply {
+                      max = 14  // 10..24
+                      progress = chatFontSize - 10
+                  }
+                  slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                          chatFontSize = progress + 10
+                          label.text = "当前字号: $chatFontSize"
+                      }
+                      override fun onStartTrackingTouch(sb: SeekBar?) {}
+                      override fun onStopTrackingTouch(sb: SeekBar?) {}
+                  })
+                  container.addView(label)
+                  container.addView(slider)
+                  AlertDialog.Builder(this)
+                      .setTitle("调节字体大小")
+                      .setView(container)
+                      .setPositiveButton("完成") { _, _ ->
+                          saveSettings()
+                          chatAdapter.fontSize = chatFontSize
+                          chatAdapter.notifyDataSetChanged()
+                      }
+                      .show()
+              }
 
-              @mainthread
-              def _on_message_success(self, replies, target_record, new_session_id):
-                  if new_session_id:
-                      target_record["id"] = new_session_id
-                      
-                  for reply in replies:
-                      clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                      target_record["messages"].append({"is_user": False, "text": clean_reply})
+              private fun showDeleteDialog(session: ChatSession) {
+                  AlertDialog.Builder(this)
+                      .setTitle("提示")
+                      .setMessage("是否删除此记录？")
+                      .setPositiveButton("删除") { _, _ -> deleteSession(session) }
+                      .setNegativeButton("取消", null)
+                      .show()
+              }
 
-                  if self.current_record == target_record:
-                      self.session_id = target_record.get("id")
-                      self.is_processing = False
-                      self.send_btn.text = "发送"
-                      self.send_btn.set_disabled(False)
-                      
-                      for reply in replies:
-                          clean_reply = strip_unsupported_emoticons(str(reply)).replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r', '').strip()
-                          self._check_and_render_message(clean_reply, is_user=False, target_record=self.current_record)
-                      
-                      self._scroll_to_bottom()
-                      
-                  self.save_all_history()
-                  self.refresh_sidebar()
+              private fun showClearAllDialog() {
+                  AlertDialog.Builder(this)
+                      .setTitle("警告")
+                      .setMessage("确认清空所有聊天记录？")
+                      .setPositiveButton("清空") { _, _ ->
+                          histories.clear()
+                          saveAllHistory()
+                          refreshHistory()
+                          chatAdapter.clearMessages()
+                          currentSession = ChatSession()
+                          startNewSession()
+                      }
+                      .setNegativeButton("取消", null)
+                      .show()
+              }
 
-              @mainthread
-              def _on_message_error(self, err, target_record):
-                  if self.current_record == target_record:
-                      self.is_processing = False
-                      self.send_btn.text = "发送"
-                      self.send_btn.set_disabled(False)
-                      self.chat_layout.add_widget(MessageRow("【处理异常】请重试", is_user=False, is_error=True, font_size=self.chat_font_size))
-                      self._scroll_to_bottom()
+              // ───────────────────────────────────────────
+              //  History persistence
+              // ───────────────────────────────────────────
 
-          if __name__ == "__main__":
-              ChatApp().run()
-          EOF
-          echo "main.py generated successfully!"
+              private fun saveAllHistory() {
+                  try {
+                      val arr = JSONArray()
+                      histories.filter { it.messages.any { m -> m.isUser } }.take(15).forEach { s ->
+                          val obj = JSONObject()
+                          obj.put("id", s.id ?: JSONObject.NULL)
+                          obj.put("preview", s.preview)
+                          val msgs = JSONArray()
+                          s.messages.forEach { m ->
+                              msgs.put(JSONObject().apply {
+                                  put("is_user", m.isUser)
+                                  put("text", m.text)
+                                  put("is_error", m.isError)
+                                  put("is_system", m.isSystem)
+                              })
+                          }
+                          obj.put("messages", msgs)
+                          arr.put(obj)
+                      }
+                      historyFile.writeText(arr.toString())
+                  } catch (_: Exception) {}
+              }
 
-      - name: Generate buildozer.spec
-        run: |
-          cat > buildozer.spec << 'EOF'
-          [app]
-          title = 李尔聊天机器人
-          package.name = mychatbot
-          package.domain = org.lear
-          source.dir = .
-          source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,txt,cfg,ini
-          version = 1.0.13
-          requirements = python3,kivy
-          orientation = portrait
-          fullscreen = 0
-          android.permissions = INTERNET
-          android.minapi = 21
-          android.api = 34
-          android.ndk = 25b
-          android.accept_sdk_license = True
-          android.allow_backup = 1
-          android.archs = arm64-v8a
-          presplash.duration = 3
-          p4a.branch = master
-          p4a.source_dir = /home/runner/work/python-for-android
-          no-compile-pyo = False
+              private fun loadAllHistory() {
+                  try {
+                      if (historyFile.exists()) {
+                          val arr = JSONArray(historyFile.readText())
+                          for (i in 0 until arr.length()) {
+                              val obj = arr.getJSONObject(i)
+                              val session = ChatSession(
+                                  id = if (obj.isNull("id")) null else obj.getString("id"),
+                                  preview = obj.optString("preview", "新对话")
+                              )
+                              val msgs = obj.getJSONArray("messages")
+                              for (j in 0 until msgs.length()) {
+                                  val m = msgs.getJSONObject(j)
+                                  session.messages.add(ChatMessage(
+                                      text = m.getString("text"),
+                                      isUser = m.getBoolean("is_user"),
+                                      isError = m.optBoolean("is_error", false),
+                                      isSystem = m.optBoolean("is_system", false)
+                                  ))
+                              }
+                              histories.add(session)
+                          }
+                      }
+                  } catch (_: Exception) { histories.clear() }
+              }
 
-          [buildozer]
-          log_level = 1
-          warn_on_root = 1
-          EOF
-          echo "buildozer.spec generated"
+              private fun refreshHistory() {
+                  historyAdapter.updateList(histories.filter { it.messages.any { m -> m.isUser } })
+              }
+
+              private fun saveSettings() {
+                  try {
+                      settingsFile.writeText(JSONObject().put("font_size", chatFontSize).toString())
+                  } catch (_: Exception) {}
+              }
+
+              private fun loadSettings() {
+                  try {
+                      if (settingsFile.exists()) {
+                          chatFontSize = JSONObject(settingsFile.readText()).optInt("font_size", 14)
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              // ───────────────────────────────────────────
+              //  Helpers
+              // ───────────────────────────────────────────
+
+              private fun cleanText(text: String): String {
+                  return text
+                      .replace("\\r\\n", "\n")
+                      .replace("\\n", "\n")
+                      .replace("\r", "")
+                      .trim()
+              }
+
+              private fun scrollToBottom() {
+                  chatRecycler.post {
+                      val pos = chatAdapter.itemCount - 1
+                      if (pos >= 0) chatRecycler.smoothScrollToPosition(pos)
+                  }
+              }
+
+              // ═══════════════════════════════════════════
+              //  Chat Adapter
+              // ═══════════════════════════════════════════
+
+              inner class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+                  private val messages = mutableListOf<ChatMessage>()
+                  var fontSize: Int = 14
+
+                  companion object {
+                      private const val TYPE_USER = 0
+                      private const val TYPE_BOT = 1
+                      private const val TYPE_ERROR = 2
+                      private const val TYPE_SYSTEM = 3
+                  }
+
+                  fun addMessage(msg: ChatMessage) {
+                      messages.add(msg)
+                      notifyItemInserted(messages.size - 1)
+                  }
+
+                  fun clearMessages() {
+                      messages.clear()
+                      notifyDataSetChanged()
+                  }
+
+                  override fun getItemViewType(pos: Int): Int {
+                      val m = messages[pos]
+                      return when {
+                          m.isSystem -> TYPE_SYSTEM
+                          m.isError -> TYPE_ERROR
+                          m.isUser -> TYPE_USER
+                          else -> TYPE_BOT
+                      }
+                  }
+
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+                      val tv = TextView(parent.context).apply {
+                          layoutParams = ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          setPadding(48, 28, 48, 28)
+                          letterSpacing = 0.01f
+                          lineSpacingExtra = 4f
+                      }
+                      return object : RecyclerView.ViewHolder(tv) {}
+                  }
+
+                  override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int) {
+                      val msg = messages[pos]
+                      val tv = holder.itemView as TextView
+                      tv.text = msg.text
+                      tv.textSize = fontSize.toFloat()
+
+                      val lp = tv.layoutParams as ViewGroup.MarginLayoutParams
+                      when (getItemViewType(pos)) {
+                          TYPE_USER -> {
+                              tv.gravity = Gravity.START
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_user)
+                              lp.setMargins(160, 8, 16, 8)
+                          }
+                          TYPE_BOT -> {
+                              tv.gravity = Gravity.START
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.bot_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_bot)
+                              lp.setMargins(16, 8, 160, 8)
+                          }
+                          TYPE_ERROR -> {
+                              tv.gravity = Gravity.START
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_error)
+                              lp.setMargins(16, 8, 160, 8)
+                          }
+                          TYPE_SYSTEM -> {
+                              tv.gravity = Gravity.CENTER
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                              tv.background = null
+                              tv.textSize = (fontSize - 2).toFloat()
+                              lp.setMargins(48, 12, 48, 12)
+                          }
+                      }
+                      tv.layoutParams = lp
+                  }
+
+                  override fun getItemCount() = messages.size
+              }
+
+              // ═══════════════════════════════════════════
+              //  History Adapter
+              // ═══════════════════════════════════════════
+
+              inner class HistoryAdapter : RecyclerView.Adapter<HistoryAdapter.VH>() {
+                  private var items = listOf<ChatSession>()
+                  var onItemClick: ((ChatSession) -> Unit)? = null
+                  var onItemLongClick: ((ChatSession) -> Unit)? = null
+
+                  fun updateList(list: List<ChatSession>) {
+                      items = list
+                      notifyDataSetChanged()
+                  }
+
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+                      val tv = TextView(parent.context).apply {
+                          layoutParams = ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          setPadding(48, 38, 48, 38)
+                          textSize = 15f
+                          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                          maxWidth = parent.width - 96
+                          maxLines = 1
+                          ellipsize = android.text.TextUtils.TruncateAt.END
+                      }
+                      return VH(tv)
+                  }
+
+                  override fun onBindViewHolder(holder: VH, pos: Int) {
+                      val session = items[pos]
+                      (holder.itemView as TextView).text = session.preview
+                  }
+
+                  override fun getItemCount() = items.size
+
+                  inner class VH(itemView: View) : RecyclerView.ViewHolder(itemView) {
+                      init {
+                          itemView.setOnClickListener {
+                              val pos = bindingAdapterPosition
+                              if (pos != RecyclerView.NO_POSITION) onItemClick?.invoke(items[pos])
+                          }
+                          itemView.setOnLongClickListener {
+                              val pos = bindingAdapterPosition
+                              if (pos != RecyclerView.NO_POSITION) onItemLongClick?.invoke(items[pos])
+                              true
+                          }
+                      }
+                  }
+              }
+          }
+          KT_EOF
+
+          echo "Android project generated successfully!"
 
       - name: Build APK
         run: |
           set -eo pipefail
-          buildozer -v android debug
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: 李尔聊天机器人-APK
-          path: bin/*.apk
+          path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
