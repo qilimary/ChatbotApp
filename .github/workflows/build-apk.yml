@@ -111,7 +111,6 @@ jobs:
           cp chatbot_data.py app/src/main/python/
           cp chatbot_idioms.py app/src/main/python/
           cp word_vectors.json app/src/main/python/
-          # Also copy any other py/json files
           for f in *.py *.json; do
             [ -f "$f" ] && cp -n "$f" app/src/main/python/ 2>/dev/null || true
           done
@@ -130,6 +129,9 @@ jobs:
           def web_process_message(text, session_id):
               return lear_main.web_process_message(text, session_id)
           PYEOF
+
+          # ── local.properties ──
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
 
           # ── settings.gradle ──
           cat > settings.gradle << 'GRADLE_EOF'
@@ -194,7 +196,6 @@ jobs:
                   python {
                       version "3.10"
                       pip {
-                          // No third-party packages needed
                       }
                   }
               }
@@ -302,14 +303,12 @@ jobs:
               android:layout_width="match_parent"
               android:layout_height="match_parent">
 
-              <!-- ── Main content ── -->
               <LinearLayout
                   android:layout_width="match_parent"
                   android:layout_height="match_parent"
                   android:orientation="vertical"
                   android:background="@color/bg_color">
 
-                  <!-- Toolbar -->
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="56dp"
@@ -357,7 +356,6 @@ jobs:
                           app:tint="@color/black" />
                   </LinearLayout>
 
-                  <!-- Chat area -->
                   <androidx.recyclerview.widget.RecyclerView
                       android:id="@+id/chat_recycler"
                       android:layout_width="match_parent"
@@ -370,7 +368,6 @@ jobs:
                       android:paddingBottom="12dp"
                       android:scrollbars="vertical" />
 
-                  <!-- Loading indicator -->
                   <ProgressBar
                       android:id="@+id/loading_bar"
                       style="?android:attr/progressBarStyleHorizontal"
@@ -380,7 +377,6 @@ jobs:
                       android:visibility="gone"
                       android:indeterminateTint="@color/accent_blue" />
 
-                  <!-- Input area -->
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
@@ -419,7 +415,6 @@ jobs:
                   </LinearLayout>
               </LinearLayout>
 
-              <!-- ── Navigation drawer ── -->
               <LinearLayout
                   android:layout_width="300dp"
                   android:layout_height="match_parent"
@@ -587,10 +582,6 @@ jobs:
           import org.json.JSONObject
           import java.io.File
 
-          // ═══════════════════════════════════════════════════════════
-          //  Data classes
-          // ═══════════════════════════════════════════════════════════
-
           data class ChatMessage(
               val text: String,
               val isUser: Boolean,
@@ -604,13 +595,8 @@ jobs:
               val messages: MutableList<ChatMessage> = mutableListOf()
           )
 
-          // ═══════════════════════════════════════════════════════════
-          //  Main Activity
-          // ═══════════════════════════════════════════════════════════
-
           class MainActivity : AppCompatActivity() {
 
-              // UI
               private lateinit var drawerLayout: DrawerLayout
               private lateinit var chatRecycler: RecyclerView
               private lateinit var historyRecycler: RecyclerView
@@ -622,26 +608,18 @@ jobs:
               private lateinit var btnMenu: ImageButton
               private lateinit var loadingBar: ProgressBar
 
-              // Adapters
               private val chatAdapter = ChatAdapter()
               private val historyAdapter = HistoryAdapter()
 
-              // State
               private val histories = mutableListOf<ChatSession>()
               private var currentSession = ChatSession()
               private var isProcessing = false
               private var chatFontSize = 14
 
-              // Python
               private var bootstrapModule: com.chaquo.python.PyObject? = null
 
-              // Files
               private val historyFile by lazy { File(filesDir, "chat_history.json") }
               private val settingsFile by lazy { File(filesDir, "settings.json") }
-
-              // ───────────────────────────────────────────
-              //  Lifecycle
-              // ───────────────────────────────────────────
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -672,9 +650,7 @@ jobs:
               }
 
               private fun setupListeners() {
-                  btnMenu.setOnClickListener {
-                      drawerLayout.openDrawer(Gravity.START)
-                  }
+                  btnMenu.setOnClickListener { drawerLayout.openDrawer(Gravity.START) }
                   btnFontSize.setOnClickListener { showFontSizeDialog() }
                   btnNewSession.setOnClickListener { startNewSession() }
                   btnSend.setOnClickListener { sendMessage() }
@@ -690,9 +666,7 @@ jobs:
               }
 
               private fun setupRecyclerViews() {
-                  chatRecycler.layoutManager = LinearLayoutManager(this).apply {
-                      stackFromEnd = true
-                  }
+                  chatRecycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
                   chatRecycler.adapter = chatAdapter
                   chatAdapter.fontSize = chatFontSize
 
@@ -701,10 +675,6 @@ jobs:
                   historyAdapter.onItemClick = { session -> loadSession(session) }
                   historyAdapter.onItemLongClick = { session -> showDeleteDialog(session) }
               }
-
-              // ───────────────────────────────────────────
-              //  Python initialization
-              // ───────────────────────────────────────────
 
               private fun initPython() {
                   loadingBar.visibility = View.VISIBLE
@@ -750,23 +720,17 @@ jobs:
                   }
               }
 
-              // ───────────────────────────────────────────
-              //  Send message
-              // ───────────────────────────────────────────
-
               private fun sendMessage() {
                   if (isProcessing || bootstrapModule == null) return
                   val text = inputMessage.text.toString().trim()
                   if (text.isEmpty()) return
 
-                  // First message → set preview
                   val isFirst = currentSession.messages.none { it.isUser }
                   if (isFirst) {
                       currentSession.preview = if (text.length > 12) text.substring(0, 12) + "..." else text
                       if (currentSession !in histories) histories.add(0, currentSession)
                   }
 
-                  // Add user message
                   val userMsg = ChatMessage(text, isUser = true)
                   currentSession.messages.add(userMsg)
                   chatAdapter.addMessage(userMsg)
@@ -774,12 +738,10 @@ jobs:
                   saveAllHistory()
                   refreshHistory()
 
-                  // Clear input
                   inputMessage.text.clear()
                   val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
                   imm.hideSoftInputFromWindow(inputMessage.windowToken, 0)
 
-                  // Processing state
                   isProcessing = true
                   btnSend.text = "发送中"
                   btnSend.isEnabled = false
@@ -821,10 +783,6 @@ jobs:
                       }
                   }
               }
-
-              // ───────────────────────────────────────────
-              //  Session management
-              // ───────────────────────────────────────────
 
               private fun startNewSession() {
                   if (currentSession.messages.isEmpty()) {
@@ -904,10 +862,6 @@ jobs:
                   if (currentSession === session) startNewSession()
               }
 
-              // ───────────────────────────────────────────
-              //  System message lock
-              // ───────────────────────────────────────────
-
               private fun isSystemMessage(text: String): Boolean {
                   return text.startsWith("【") && text.endsWith("】")
               }
@@ -924,10 +878,6 @@ jobs:
                   }
               }
 
-              // ───────────────────────────────────────────
-              //  Dialogs
-              // ───────────────────────────────────────────
-
               private fun showFontSizeDialog() {
                   val container = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -939,7 +889,7 @@ jobs:
                       textSize = 16f
                   }
                   val slider = SeekBar(this).apply {
-                      max = 14  // 10..24
+                      max = 14
                       progress = chatFontSize - 10
                   }
                   slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -987,10 +937,6 @@ jobs:
                       .setNegativeButton("取消", null)
                       .show()
               }
-
-              // ───────────────────────────────────────────
-              //  History persistence
-              // ───────────────────────────────────────────
 
               private fun saveAllHistory() {
                   try {
@@ -1059,10 +1005,6 @@ jobs:
                   } catch (_: Exception) {}
               }
 
-              // ───────────────────────────────────────────
-              //  Helpers
-              // ───────────────────────────────────────────
-
               private fun cleanText(text: String): String {
                   return text
                       .replace("\\r\\n", "\n")
@@ -1077,10 +1019,6 @@ jobs:
                       if (pos >= 0) chatRecycler.smoothScrollToPosition(pos)
                   }
               }
-
-              // ═══════════════════════════════════════════
-              //  Chat Adapter
-              // ═══════════════════════════════════════════
 
               inner class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                   private val messages = mutableListOf<ChatMessage>()
@@ -1166,10 +1104,6 @@ jobs:
                   override fun getItemCount() = messages.size
               }
 
-              // ═══════════════════════════════════════════
-              //  History Adapter
-              // ═══════════════════════════════════════════
-
               inner class HistoryAdapter : RecyclerView.Adapter<HistoryAdapter.VH>() {
                   private var items = listOf<ChatSession>()
                   var onItemClick: ((ChatSession) -> Unit)? = null
@@ -1223,9 +1157,22 @@ jobs:
           echo "Android project generated successfully!"
 
       - name: Build APK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           set -eo pipefail
-          gradle assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace --console=plain > build_log.txt 2>&1 || {
+            echo "=========================================="
+            echo "BUILD FAILED! Extracting key error lines:"
+            echo "=========================================="
+            grep -i -A 5 -B 2 "error\|exception\|failed\|cannot find" build_log.txt | tail -n 200
+            echo "=========================================="
+            echo "Last 100 lines of the build log:"
+            echo "=========================================="
+            tail -n 100 build_log.txt
+            exit 1
+          }
 
       - name: Upload APK
         if: success()
