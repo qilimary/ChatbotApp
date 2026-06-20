@@ -38,13 +38,11 @@ jobs:
         run: pip install "gdown>=4.7.1"
 
       - name: Download chatbot zip
-        # 【更新】：使用了你提供的最新谷歌网盘链接
         run: |
           gdown 'https://drive.google.com/uc?id=1r3OE4JoEUI-12_yxxNDlgXsKFrClm1tH' -O 机器人.zip
           unzip -o 机器人.zip -d 机器人解压/
 
       - name: Extract chatbot files
-        # 【更新】：将打包好的缓存 pkl 文件一并提取
         run: |
           CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
           cp -v "$CHATBOT_DIR"/*.py . 2>/dev/null || true
@@ -92,18 +90,15 @@ jobs:
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               new_content = content
               
-              # 关闭并发防止卡死
               new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
               new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
               
-              # 过滤非字符串防止报错
               new_content = new_content.replace(
                   "self.bonus_terms.items()", 
                   "(self.bonus_terms.items() if hasattr(self.bonus_terms, \"items\") else {k: 1.0 for k in self.bonus_terms if isinstance(k, str)}.items())"
               )
               
-              # 【依然为你保留了这行】：解开注释，恢复系统消息！
               new_content = new_content.replace("# self.messages.append(str(text))", "self.messages.append(str(text))")
               
               if new_content != content:
@@ -122,7 +117,6 @@ jobs:
           mkdir -p app/src/main/assets/chatbot
           mkdir -p app/src/main/python
 
-          # 把 pkl 等缓存全部扔进安卓包里
           for f in *.py *.json *.pkl; do
             [ -f "$f" ] && cp -n "$f" app/src/main/assets/chatbot/ 2>/dev/null || true
           done
@@ -181,7 +175,7 @@ jobs:
               namespace 'com.lear.chatbot'; compileSdk 34
               defaultConfig {
                   applicationId "com.lear.chatbot"; minSdk 26; targetSdk 34; versionCode 1; versionName "2.0.0"
-                  # 【更新】：去掉了冗余架构，仅支持 64位 真机环境，大幅减小体积！
+                  // 修复了这里的注释符号，使用双斜杠
                   ndk { abiFilters "arm64-v8a" }; python { version "3.10" }
               }
               buildTypes { release { minifyEnabled false } }
@@ -229,8 +223,6 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/drawer_layout" android:layout_width="match_parent" android:layout_height="match_parent">
               <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/bg_color">
-                  
-                  <!-- 【更新】：顶部栏高度从 56dp 缩小至 48dp，图标和文字适配缩小，给聊天区留出更多空间 -->
                   <RelativeLayout android:layout_width="match_parent" android:layout_height="48dp" android:background="@color/white" android:elevation="2dp">
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
@@ -239,8 +231,10 @@ jobs:
                       <TextView android:id="@+id/tv_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerInParent="true" android:text="李尔" android:textSize="16sp" android:textStyle="bold" android:textColor="@color/black" />
                       <ImageButton android:id="@+id/btn_new_session" android:layout_width="44dp" android:layout_height="match_parent" android:layout_alignParentEnd="true" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
                   </RelativeLayout>
-
-                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" android:scrollbars="vertical" android:scrollbarThumbVertical="@android:color/darker_gray" android:scrollbarSize="4dp" android:fadeScrollbars="false" />
+                  
+                  <!-- 【新增】：增加了 app:fastScrollEnabled 支持隐藏与长按拖拽快速滑动 -->
+                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" app:fastScrollEnabled="true" app:fastScrollVerticalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollVerticalTrackDrawable="@drawable/fastscroll_track" app:fastScrollHorizontalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollHorizontalTrackDrawable="@drawable/fastscroll_track" />
+                  
                   <ProgressBar android:id="@+id/loading_bar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" android:indeterminateTint="@color/accent_blue" />
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="8dp" android:background="@color/white" android:elevation="4dp">
                       <EditText android:id="@+id/input_message" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:hint="正在加载..." android:textColorHint="@color/gray_text" android:background="@drawable/bg_input" android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="10dp" android:paddingBottom="10dp" android:textSize="15sp" android:textColor="@color/black" android:maxLines="4" android:inputType="textMultiLine|textCapSentences" android:imeOptions="actionSend" />
@@ -254,6 +248,36 @@ jobs:
                   <com.google.android.material.button.MaterialButton android:id="@+id/btn_clear_all" android:layout_width="match_parent" android:layout_height="52dp" android:text="清空所有记录" android:textColor="@color/white" android:insetTop="0dp" android:insetBottom="0dp" app:backgroundTint="@color/error_red" app:cornerRadius="0dp" />
               </LinearLayout>
           </androidx.drawerlayout.widget.DrawerLayout>
+          XML_EOF
+
+          # 【新增】：拖拽滚动条的滑块样式（按下时变宽变蓝）
+          cat > app/src/main/res/drawable/fastscroll_thumb.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <selector xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:state_pressed="true">
+                  <shape android:shape="rectangle">
+                      <solid android:color="#007AFF"/>
+                      <corners android:radius="4dp"/>
+                      <size android:width="8dp" android:height="60dp"/>
+                  </shape>
+              </item>
+              <item>
+                  <shape android:shape="rectangle">
+                      <solid android:color="#A0A0A0"/>
+                      <corners android:radius="2dp"/>
+                      <size android:width="4dp" android:height="60dp"/>
+                  </shape>
+              </item>
+          </selector>
+          XML_EOF
+
+          # 【新增】：拖拽滚动条的隐形轨道（20dp 宽度，方便手指触摸判定）
+          cat > app/src/main/res/drawable/fastscroll_track.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="@android:color/transparent"/>
+              <size android:width="20dp"/>
+          </shape>
           XML_EOF
 
           cat > app/src/main/res/drawable/bg_input.xml << 'XML_EOF'
@@ -386,12 +410,9 @@ jobs:
                   historyAdapter.onItemClick = { loadSession(it) }; historyAdapter.onItemLongClick = { showDeleteDialog(it) }
               }
 
-              // 【关键升级】：加入秒开检测机制！只在第一次安装时解压 500MB，之后瞬间进入
               private suspend fun extractAssetsToDisk(): String = withContext(Dispatchers.IO) {
                   val destDir = File(filesDir, "chatbot"); if (!destDir.exists()) destDir.mkdirs()
-                  
                   val checkFile = File(destDir, "corpus_vectors_cache.pkl")
-                  // 如果那个几百兆的文件已经存在，说明解压过了，直接跳过！节约好几秒！
                   if (!checkFile.exists() || checkFile.length() < 1000) {
                       val assetManager = assets; val files = assetManager.list("chatbot") ?: arrayOf()
                       for (filename in files) { 
