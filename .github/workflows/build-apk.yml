@@ -80,7 +80,7 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Auto-patch source code
+      - name: Auto-patch source code (Fix Bugs dynamically)
         run: |
           python3 -c '
           import os, re
@@ -88,9 +88,17 @@ jobs:
               if not fname.endswith(".py"): continue
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               new_content = content
+              # 优化并发
               new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
               new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
+              
+              # 【核心修复】：解决 set 没有 items() 的致命选择题 Bug
+              new_content = new_content.replace(
+                  "self.bonus_terms.items()", 
+                  "(self.bonus_terms.items() if hasattr(self.bonus_terms, \'items\') else {k: 1.0 for k in self.bonus_terms}.items())"
+              )
+              
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
@@ -104,7 +112,6 @@ jobs:
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/mipmap-anydpi-v26
           
-          # 【核心修改区】：不放进压缩包，而是放进 assets 准备解压到真实文件夹
           mkdir -p app/src/main/assets/chatbot
           mkdir -p app/src/main/python
 
@@ -117,29 +124,20 @@ jobs:
             [ -f "$f" ] && cp -n "$f" app/src/main/assets/chatbot/ 2>/dev/null || true
           done
 
-          # bootstrap.py 保留在 python 文件夹作为桥梁
           cat > app/src/main/python/bootstrap.py << 'PYEOF'
           # -*- coding: utf-8 -*-
           import os, sys, json, traceback
-
           _lear_main = None
 
           def init_backend(files_dir):
               global _lear_main
               try:
-                  # 切换到解压出的真实文件夹
                   os.chdir(files_dir)
-                  if files_dir not in sys.path:
-                      sys.path.insert(0, files_dir)
-                  
+                  if files_dir not in sys.path: sys.path.insert(0, files_dir)
                   import lear_main
                   _lear_main = lear_main
-                  
                   result = _lear_main.web_start_session()
                   return json.dumps(result)
-              except SystemExit as e:
-                  # 捕获导致闪退的真凶：sys.exit
-                  return json.dumps({"error": f"Python触发了退出指令 SystemExit({e.code})", "traceback": traceback.format_exc()})
               except Exception as e:
                   return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
@@ -148,8 +146,6 @@ jobs:
               try:
                   result = _lear_main.web_process_message(text, session_id)
                   return json.dumps(result)
-              except SystemExit as e:
-                  return json.dumps({"error": f"Python触发了退出指令 SystemExit({e.code})", "traceback": traceback.format_exc()})
               except Exception as e:
                   return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
           PYEOF
@@ -157,23 +153,14 @@ jobs:
           echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
 
           cat > settings.gradle << 'GRADLE_EOF'
-          pluginManagement {
-              repositories { google(); mavenCentral(); gradlePluginPortal() }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories { google(); mavenCentral() }
-          }
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
           rootProject.name = "LearChatbot"
           include ':app'
           GRADLE_EOF
 
           cat > build.gradle << 'GRADLE_EOF'
-          plugins {
-              id 'com.android.application' version '8.1.4' apply false
-              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
-              id 'com.chaquo.python' version '15.0.1' apply false
-          }
+          plugins { id 'com.android.application' version '8.1.4' apply false; id 'org.jetbrains.kotlin.android' version '1.9.20' apply false; id 'com.chaquo.python' version '15.0.1' apply false }
           GRADLE_EOF
 
           cat > gradle.properties << 'GRADLE_EOF'
@@ -186,37 +173,21 @@ jobs:
           GRADLE_EOF
 
           cat > app/build.gradle << 'GRADLE_EOF'
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-              id 'com.chaquo.python'
-          }
+          plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'com.chaquo.python' }
           android {
-              namespace 'com.lear.chatbot'
-              compileSdk 34
+              namespace 'com.lear.chatbot'; compileSdk 34
               defaultConfig {
-                  applicationId "com.lear.chatbot"
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 1
-                  versionName "2.0.0"
-                  ndk { abiFilters "arm64-v8a", "x86_64" }
-                  python { version "3.10" }
+                  applicationId "com.lear.chatbot"; minSdk 26; targetSdk 34; versionCode 1; versionName "2.0.0"
+                  ndk { abiFilters "arm64-v8a", "x86_64" }; python { version "3.10" }
               }
               buildTypes { release { minifyEnabled false } }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = '17' }
           }
           dependencies {
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
-              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-              implementation 'androidx.recyclerview:recyclerview:1.3.2'
-              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+              implementation 'androidx.core:core-ktx:1.12.0'; implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'; implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              implementation 'androidx.recyclerview:recyclerview:1.3.2'; implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
               implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
           }
           GRADLE_EOF
@@ -225,84 +196,59 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
-              <!-- 加入 largeHeap 确保就算有峰值也不会 OOM -->
-              <application
-                  android:largeHeap="true"
-                  android:allowBackup="true"
-                  android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher"
-                  android:label="@string/app_name"
-                  android:supportsRtl="true"
-                  android:theme="@style/Theme.LearChatbot">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
+              <application android:largeHeap="true" android:allowBackup="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.LearChatbot">
+                  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
               </application>
           </manifest>
           XML_EOF
 
           cat > app/src/main/res/values/strings.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources><string name="app_name">李尔</string></resources>
+          <?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">李尔</string></resources>
           XML_EOF
 
           cat > app/src/main/res/values/colors.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <color name="bg_color">#F2F2F7</color>
-              <color name="white">#FFFFFF</color>
-              <color name="black">#0A0A0A</color>
-              <color name="accent_blue">#007AFF</color>
-              <color name="error_red">#FF3B30</color>
-              <color name="user_bubble">#007AFF</color>
-              <color name="user_text">#FFFFFF</color>
-              <color name="bot_bubble">#FFFFFF</color>
-              <color name="bot_text">#1A1A1A</color>
-              <color name="gray_text">#8E8E93</color>
-              <color name="border_gray">#E0E0E0</color>
-              <color name="input_bg">#F2F2F7</color>
+              <color name="bg_color">#F2F2F7</color><color name="white">#FFFFFF</color><color name="black">#0A0A0A</color>
+              <color name="accent_blue">#007AFF</color><color name="error_red">#FF3B30</color><color name="user_bubble">#007AFF</color>
+              <color name="user_text">#FFFFFF</color><color name="bot_bubble">#FFFFFF</color><color name="bot_text">#1A1A1A</color>
+              <color name="gray_text">#8E8E93</color><color name="border_gray">#E0E0E0</color><color name="input_bg">#F2F2F7</color>
           </resources>
           XML_EOF
 
           cat > app/src/main/res/values/themes.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.LearChatbot" parent="Theme.MaterialComponents.Light.NoActionBar">
-                  <item name="colorPrimary">@color/accent_blue</item>
-                  <item name="colorPrimaryVariant">@color/accent_blue</item>
-                  <item name="colorOnPrimary">@color/white</item>
-                  <item name="android:statusBarColor">@color/white</item>
-                  <item name="android:windowLightStatusBar">true</item>
-                  <item name="android:windowBackground">@color/bg_color</item>
-              </style>
-          </resources>
+          <resources><style name="Theme.LearChatbot" parent="Theme.MaterialComponents.Light.NoActionBar"><item name="colorPrimary">@color/accent_blue</item><item name="colorPrimaryVariant">@color/accent_blue</item><item name="colorOnPrimary">@color/white</item><item name="android:statusBarColor">@color/white</item><item name="android:windowLightStatusBar">true</item><item name="android:windowBackground">@color/bg_color</item></style></resources>
           XML_EOF
 
-          # 生成界面与图标（为节省空间这里复用你原有的XML内容即可）
-          cp app/src/main/res/values/colors.xml . # 占位
+          # 【UI重大更新：绝对居中标题，更明显的滚动条】
           cat > app/src/main/res/layout/activity_main.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/drawer_layout" android:layout_width="match_parent" android:layout_height="match_parent">
               <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/bg_color">
-                  <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:background="@color/white" android:gravity="center_vertical" android:elevation="2dp">
-                      <ImageButton android:id="@+id/btn_menu" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
-                      <ImageButton android:id="@+id/btn_font" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_font" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="字体" app:tint="@color/black" />
-                      <TextView android:id="@+id/tv_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="李尔" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" android:gravity="center" />
-                      <ImageButton android:id="@+id/btn_new_session" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
-                  </LinearLayout>
-                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" android:scrollbars="vertical" />
+                  
+                  <RelativeLayout android:layout_width="match_parent" android:layout_height="56dp" android:background="@color/white" android:elevation="2dp">
+                      <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
+                          <ImageButton android:id="@+id/btn_menu" android:layout_width="48dp" android:layout_height="48dp" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
+                          <TextView android:id="@+id/btn_font" android:layout_width="48dp" android:layout_height="48dp" android:text="字体" android:textSize="15sp" android:textColor="@color/black" android:gravity="center" android:background="?attr/selectableItemBackgroundBorderless" android:clickable="true" android:focusable="true" />
+                      </LinearLayout>
+                      
+                      <TextView android:id="@+id/tv_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerInParent="true" android:text="李尔" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
+                      
+                      <ImageButton android:id="@+id/btn_new_session" android:layout_width="48dp" android:layout_height="48dp" android:layout_alignParentEnd="true" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
+                  </RelativeLayout>
+
+                  <!-- 增加了常驻的灰色垂直滚动条 -->
+                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" android:scrollbars="vertical" android:scrollbarThumbVertical="@android:color/darker_gray" android:scrollbarSize="4dp" android:fadeScrollbars="false" />
+                  
                   <ProgressBar android:id="@+id/loading_bar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" android:indeterminateTint="@color/accent_blue" />
+                  
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="8dp" android:background="@color/white" android:elevation="4dp">
                       <EditText android:id="@+id/input_message" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:hint="输入消息..." android:textColorHint="@color/gray_text" android:background="@drawable/bg_input" android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="10dp" android:paddingBottom="10dp" android:textSize="15sp" android:textColor="@color/black" android:maxLines="4" android:inputType="textMultiLine|textCapSentences" android:imeOptions="actionSend" />
                       <com.google.android.material.button.MaterialButton android:id="@+id/btn_send" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="发送" android:textColor="@color/white" app:backgroundTint="@color/accent_blue" app:cornerRadius="10dp" />
                   </LinearLayout>
               </LinearLayout>
+
               <LinearLayout android:layout_width="300dp" android:layout_height="match_parent" android:layout_gravity="start" android:orientation="vertical" android:background="@color/white" android:fitsSystemWindows="true">
                   <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:text="最近对话" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
                   <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border_gray" />
@@ -313,29 +259,22 @@ jobs:
           XML_EOF
 
           cat > app/src/main/res/drawable/bg_input.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/input_bg" /><corners android:radius="14dp" /></shape>
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/input_bg" /><corners android:radius="14dp" /></shape>
           XML_EOF
           cat > app/src/main/res/drawable/bg_bubble_user.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/user_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="4dp" android:bottomRightRadius="18dp" /></shape>
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/user_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="4dp" android:bottomRightRadius="18dp" /></shape>
           XML_EOF
           cat > app/src/main/res/drawable/bg_bubble_bot.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/bot_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/bot_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
           XML_EOF
           cat > app/src/main/res/drawable/bg_bubble_error.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/error_red" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/error_red" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
           XML_EOF
           cat > app/src/main/res/drawable/ic_menu.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M3,18h18v-2H3v2zM3,13h18v-2H3v2zM3,6v2h18V6H3z" /></vector>
           XML_EOF
           cat > app/src/main/res/drawable/ic_add.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></vector>
-          XML_EOF
-          cat > app/src/main/res/drawable/ic_font.xml << 'XML_EOF'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M9.93,13.5h4.03L12,7.5L9.93,13.5zM12,2L2,12h3v8h14v-8h3L12,2zM14.5,16.5h-5L8.7,19H6.8l4.5,-11h1.4l4.5,11h-1.9L14.5,16.5z" /></vector>
           XML_EOF
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/ic_launcher_bg" /><foreground android:drawable="@drawable/ic_launcher_fg" /></adaptive-icon>
@@ -347,6 +286,7 @@ jobs:
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#FFFFFF" android:pathData="M54,38 C42,38 32,45 32,54 C32,63 42,70 54,70 C57,70 60,69.5 63,68.5 L72,72 L69,63 C72.5,60.5 76,57.5 76,54 C76,45 66,38 54,38 Z" /></vector>
           XML_EOF
 
+          # 【Kotlin核心逻辑更新：气泡自适应、换行修复、列表顶部对齐】
           cat > app/src/main/java/com/lear/chatbot/MainActivity.kt << 'KT_EOF'
           package com.lear.chatbot
 
@@ -403,7 +343,7 @@ jobs:
               private lateinit var btnSend: MaterialButton
               private lateinit var btnClearAll: MaterialButton
               private lateinit var btnNewSession: ImageButton
-              private lateinit var btnFontSize: ImageButton
+              private lateinit var btnFontSize: TextView
               private lateinit var btnMenu: ImageButton
               private lateinit var loadingBar: ProgressBar
 
@@ -422,7 +362,6 @@ jobs:
               private val crashFile by lazy { File(filesDir, "crash.txt") }
 
               override fun onCreate(savedInstanceState: Bundle?) {
-                  // 崩溃日志收集系统
                   Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
                       try { crashFile.writeText(throwable.stackTraceToString()) } catch (e: Exception) {}
                       android.os.Process.killProcess(android.os.Process.myPid())
@@ -481,7 +420,8 @@ jobs:
               }
 
               private fun setupRecyclerViews() {
-                  chatRecycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
+                  // 去掉 stackFromEnd，实现顶部对齐
+                  chatRecycler.layoutManager = LinearLayoutManager(this)
                   chatRecycler.adapter = chatAdapter
                   chatAdapter.fontSize = chatFontSize
 
@@ -501,9 +441,7 @@ jobs:
                       for (filename in files) {
                           val outFile = File(destDir, filename)
                           assetManager.open("chatbot/$filename").use { input ->
-                              outFile.outputStream().use { output ->
-                                  input.copyTo(output)
-                              }
+                              outFile.outputStream().use { output -> input.copyTo(output) }
                           }
                       }
                       destDir.absolutePath
@@ -518,11 +456,8 @@ jobs:
                   lifecycleScope.launch {
                       try {
                           val realFilesDir = extractAssetsToDisk()
-                          
                           withContext(Dispatchers.IO) {
-                              if (!Python.isStarted()) {
-                                  Python.start(AndroidPlatform(applicationContext))
-                              }
+                              if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
                               val py = Python.getInstance()
                               bootstrapModule = py.getModule("bootstrap")
                               val resultStr = bootstrapModule?.callAttr("init_backend", realFilesDir)?.toString()
@@ -605,9 +540,7 @@ jobs:
                                   } else {
                                       nsid = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
                                       val reps = resultJson.getJSONArray("replies")
-                                      for (i in 0 until reps.length()) {
-                                          repsList.add(reps.getString(i))
-                                      }
+                                      for (i in 0 until reps.length()) { repsList.add(reps.getString(i)) }
                                   }
                               }
                               Triple(repsList, nsid, Pair(pyError, pyTrace))
@@ -644,10 +577,7 @@ jobs:
               }
 
               private fun startNewSession() {
-                  if (currentSession.messages.isEmpty()) {
-                      drawerLayout.closeDrawer(Gravity.START)
-                      return
-                  }
+                  if (currentSession.messages.isEmpty()) { drawerLayout.closeDrawer(Gravity.START); return }
                   chatAdapter.clearMessages()
                   currentSession = ChatSession()
                   isProcessing = false
@@ -730,19 +660,14 @@ jobs:
               private fun checkSystemMessageLock() {
                   val lastMsg = currentSession.messages.lastOrNull()
                   if (lastMsg != null && lastMsg.isSystem) {
-                      btnSend.isEnabled = false
-                      inputMessage.isEnabled = false
-                      inputMessage.hint = "会话已结束"
+                      btnSend.isEnabled = false; inputMessage.isEnabled = false; inputMessage.hint = "会话已结束"
                   } else {
-                      inputMessage.isEnabled = true
-                      if (inputMessage.hint == "会话已结束") inputMessage.hint = "输入消息..."
+                      inputMessage.isEnabled = true; if (inputMessage.hint == "会话已结束") inputMessage.hint = "输入消息..."
                   }
               }
 
               private fun showErrorDialog(title: String, message: String) {
-                  AlertDialog.Builder(this)
-                      .setTitle(title)
-                      .setMessage(message)
+                  AlertDialog.Builder(this).setTitle(title).setMessage(message)
                       .setPositiveButton("确定", null)
                       .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }
                       .show()
@@ -760,18 +685,13 @@ jobs:
                   val label = TextView(this).apply { text = "当前字号: $chatFontSize"; setPadding(0, 0, 0, 24); textSize = 16f }
                   val slider = SeekBar(this).apply { max = 14; progress = chatFontSize - 10 }
                   slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                      override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                          chatFontSize = progress + 10; label.text = "当前字号: $chatFontSize"
-                      }
+                      override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) { chatFontSize = progress + 10; label.text = "当前字号: $chatFontSize" }
                       override fun onStartTrackingTouch(sb: SeekBar?) {}
                       override fun onStopTrackingTouch(sb: SeekBar?) {}
                   })
                   container.addView(label); container.addView(slider)
-                  AlertDialog.Builder(this)
-                      .setTitle("调节字体大小")
-                      .setView(container)
-                      .setPositiveButton("完成") { _, _ -> saveSettings(); chatAdapter.fontSize = chatFontSize; chatAdapter.notifyDataSetChanged() }
-                      .show()
+                  AlertDialog.Builder(this).setTitle("调节字体大小").setView(container)
+                      .setPositiveButton("完成") { _, _ -> saveSettings(); chatAdapter.fontSize = chatFontSize; chatAdapter.notifyDataSetChanged() }.show()
               }
 
               private fun showDeleteDialog(session: ChatSession) {
@@ -781,11 +701,7 @@ jobs:
 
               private fun showClearAllDialog() {
                   AlertDialog.Builder(this).setTitle("警告").setMessage("确认清空所有聊天记录？")
-                      .setPositiveButton("清空") { _, _ ->
-                          histories.clear()
-                          saveAllHistory(); refreshHistory()
-                          chatAdapter.clearMessages(); currentSession = ChatSession(); startNewSession()
-                      }.setNegativeButton("取消", null).show()
+                      .setPositiveButton("清空") { _, _ -> histories.clear(); saveAllHistory(); refreshHistory(); chatAdapter.clearMessages(); currentSession = ChatSession(); startNewSession() }.setNegativeButton("取消", null).show()
               }
 
               private fun saveAllHistory() {
@@ -793,12 +709,9 @@ jobs:
                       val arr = JSONArray()
                       histories.filter { it.messages.any { m -> m.isUser } }.take(15).forEach { s ->
                           val obj = JSONObject()
-                          obj.put("id", s.id ?: JSONObject.NULL)
-                          obj.put("preview", s.preview)
+                          obj.put("id", s.id ?: JSONObject.NULL); obj.put("preview", s.preview)
                           val msgs = JSONArray()
-                          s.messages.forEach { m ->
-                              msgs.put(JSONObject().apply { put("is_user", m.isUser); put("text", m.text); put("is_error", m.isError); put("is_system", m.isSystem) })
-                          }
+                          s.messages.forEach { m -> msgs.put(JSONObject().apply { put("is_user", m.isUser); put("text", m.text); put("is_error", m.isError); put("is_system", m.isSystem) }) }
                           obj.put("messages", msgs); arr.put(obj)
                       }
                       historyFile.writeText(arr.toString())
@@ -824,12 +737,13 @@ jobs:
               }
 
               private fun refreshHistory() { historyAdapter.updateList(histories.filter { it.messages.any { m -> m.isUser } }) }
-
               private fun saveSettings() { try { settingsFile.writeText(JSONObject().put("font_size", chatFontSize).toString()) } catch (_: Exception) {} }
-
               private fun loadSettings() { try { if (settingsFile.exists()) { chatFontSize = JSONObject(settingsFile.readText()).optInt("font_size", 14) } } catch (_: Exception) {} }
 
-              private fun cleanText(text: String): String = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r", "").trim()
+              // 修复换行问题：完美保留真正的换行符
+              private fun cleanText(text: String): String {
+                  return text.replace("\\n", "\n").replace("\\r", "").trim()
+              }
 
               private fun scrollToBottom() { chatRecycler.post { val pos = chatAdapter.itemCount - 1; if (pos >= 0) chatRecycler.smoothScrollToPosition(pos) } }
 
@@ -845,38 +759,65 @@ jobs:
                       return when { m.isSystem -> TYPE_SYSTEM; m.isError -> TYPE_ERROR; m.isUser -> TYPE_USER; else -> TYPE_BOT }
                   }
 
+                  // 彻底重构气泡布局：自适应文字宽度，并分为左右两侧
                   override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-                      val tv = TextView(parent.context)
-                      // 【修复布局闪退的地方】: 使用 MarginLayoutParams
-                      tv.layoutParams = ViewGroup.MarginLayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                      tv.setPadding(48, 28, 48, 28)
-                      tv.setLetterSpacing(0.01f)
-                      tv.setLineSpacing(4f, 1f)
-                      return object : RecyclerView.ViewHolder(tv) {}
+                      val container = LinearLayout(parent.context).apply {
+                          layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                          orientation = LinearLayout.HORIZONTAL
+                          setPadding(0, 16, 0, 16)
+                      }
+                      val tv = TextView(parent.context).apply {
+                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                          maxWidth = (parent.width * 0.75).toInt()
+                          setPadding(42, 28, 42, 28)
+                          setLineSpacing(6f, 1f) // 增加了一点行高，长文本更易读
+                      }
+                      container.addView(tv)
+                      return object : RecyclerView.ViewHolder(container) {}
                   }
 
                   override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int) {
                       val msg = messages[pos]
-                      val tv = holder.itemView as TextView
+                      val container = holder.itemView as LinearLayout
+                      val tv = container.getChildAt(0) as TextView
+
                       tv.text = msg.text
                       tv.textSize = fontSize.toFloat()
-                      val lp = tv.layoutParams as ViewGroup.MarginLayoutParams
+
                       when (getItemViewType(pos)) {
-                          TYPE_USER -> { tv.gravity = Gravity.START; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text)); tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_user); lp.setMargins(160, 8, 16, 8) }
-                          TYPE_BOT -> { tv.gravity = Gravity.START; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.bot_text)); tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_bot); lp.setMargins(16, 8, 160, 8) }
-                          TYPE_ERROR -> { tv.gravity = Gravity.START; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text)); tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_error); lp.setMargins(16, 8, 160, 8) }
-                          TYPE_SYSTEM -> { tv.gravity = Gravity.CENTER; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text)); tv.background = null; tv.textSize = (fontSize - 2).toFloat(); lp.setMargins(48, 12, 48, 12) }
+                          TYPE_USER -> {
+                              container.gravity = Gravity.END
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_user)
+                              (tv.layoutParams as LinearLayout.LayoutParams).setMargins(100, 0, 32, 0)
+                          }
+                          TYPE_BOT -> {
+                              container.gravity = Gravity.START
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.bot_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_bot)
+                              (tv.layoutParams as LinearLayout.LayoutParams).setMargins(32, 0, 100, 0)
+                          }
+                          TYPE_ERROR -> {
+                              container.gravity = Gravity.START
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text))
+                              tv.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_error)
+                              (tv.layoutParams as LinearLayout.LayoutParams).setMargins(32, 0, 100, 0)
+                          }
+                          TYPE_SYSTEM -> {
+                              container.gravity = Gravity.CENTER
+                              tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                              tv.background = null
+                              tv.textSize = (fontSize - 2).toFloat()
+                              (tv.layoutParams as LinearLayout.LayoutParams).setMargins(48, 0, 48, 0)
+                          }
                       }
-                      tv.layoutParams = lp
                   }
                   override fun getItemCount() = messages.size
               }
 
               inner class HistoryAdapter : RecyclerView.Adapter<HistoryAdapter.VH>() {
                   private var items = listOf<ChatSession>()
-                  var onItemClick: ((ChatSession) -> Unit)? = null
-                  var onItemLongClick: ((ChatSession) -> Unit)? = null
-
+                  var onItemClick: ((ChatSession) -> Unit)? = null; var onItemLongClick: ((ChatSession) -> Unit)? = null
                   fun updateList(list: List<ChatSession>) { items = list; notifyDataSetChanged() }
 
                   override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -885,9 +826,7 @@ jobs:
                       tv.setPadding(48, 38, 48, 38)
                       tv.textSize = 15f
                       tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
-                      tv.setMaxWidth(parent.width - 96)
-                      tv.maxLines = 1
-                      tv.setEllipsize(android.text.TextUtils.TruncateAt.END)
+                      tv.setMaxWidth(parent.width - 96); tv.maxLines = 1; tv.setEllipsize(android.text.TextUtils.TruncateAt.END)
                       return VH(tv)
                   }
                   override fun onBindViewHolder(holder: VH, pos: Int) { (holder.itemView as TextView).text = items[pos].preview }
@@ -924,4 +863,3 @@ jobs:
           name: 李尔聊天机器人-APK
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
-
