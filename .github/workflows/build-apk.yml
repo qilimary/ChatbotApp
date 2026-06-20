@@ -93,20 +93,22 @@ jobs:
               new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
               new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
+              
               new_content = new_content.replace(
                   "self.bonus_terms.items()", 
                   "(self.bonus_terms.items() if hasattr(self.bonus_terms, \"items\") else {k: 1.0 for k in self.bonus_terms if isinstance(k, str)}.items())"
               )
               new_content = new_content.replace("# self.messages.append(str(text))", "self.messages.append(str(text))")
               
+              # 【完美修复】：使用最安全的无正则替换法，注入跨窗口记忆单例
               new_content = re.sub(
-                  r"global _g_name; _g_name = globals\(\)\.get\(\"_g_name\"\) or \\2; self\.name_handler = _g_name", 
-                  "global _g_name; _g_name = globals().get(\"_g_name\") or \\2; self.name_handler = _g_name", 
+                  r"self\.name_handler\s*=\s*NameHandler\([^)]*\)", 
+                  "global _g_name; _g_name = globals().get(\"_g_name\"); self.name_handler = _g_name if _g_name else NameHandler(None); globals()[\"_g_name\"] = self.name_handler", 
                   new_content
               )
               new_content = re.sub(
-                  r"global _g_pref; _g_pref = globals\(\)\.get\(\"_g_pref\"\) or \\2; self\.preference_handler = _g_pref", 
-                  "global _g_pref; _g_pref = globals().get(\"_g_pref\") or \\2; self.preference_handler = _g_pref", 
+                  r"self\.preference_handler\s*=\s*PreferenceHandler\([^)]*\)", 
+                  "global _g_pref; _g_pref = globals().get(\"_g_pref\"); self.preference_handler = _g_pref if _g_pref else PreferenceHandler(self.name_handler); globals()[\"_g_pref\"] = self.preference_handler", 
                   new_content
               )
 
@@ -116,6 +118,13 @@ jobs:
                   "get_sentence_vector(keywords)", 
                   new_content
               )
+
+              # 【深度内存释放机制】：加入 gc.collect() 防止内存泄漏
+              if "def web_process_message" in new_content:
+                  new_content = new_content.replace(
+                      "return {\n        \"session_id\"", 
+                      "import gc; gc.collect()\n    return {\n        \"session_id\""
+                  )
 
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
@@ -137,7 +146,6 @@ jobs:
             [ -f "$f" ] && cp -n "$f" app/src/main/assets/chatbot/ 2>/dev/null || true
           done
 
-          # 【重大更新】：Python 端改为全异步线程池处理，支持提醒和主动搭话
           cat > app/src/main/python/bootstrap.py << 'PYEOF'
           # -*- coding: utf-8 -*-
           import os, sys, json, traceback, gc, threading
@@ -183,7 +191,6 @@ jobs:
                   return json.dumps({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
               try:
                   sid, session = _lear_main.WEB_SESSION_MANAGER.get_or_create_session(session_id)
-                  # 开启子线程处理，立刻释放前端控制权
                   threading.Thread(target=session.chat, args=(text,), daemon=True).start()
                   return json.dumps({"session_id": sid})
               except Exception as e:
@@ -270,7 +277,6 @@ jobs:
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
                           <TextView android:id="@+id/btn_font" android:layout_width="44dp" android:layout_height="match_parent" android:text="字体" android:textSize="14sp" android:textColor="@color/black" android:gravity="center" android:background="?attr/selectableItemBackgroundBorderless" android:clickable="true" android:focusable="true" />
-                          <!-- 【修改为喇叭图标】 -->
                           <ImageButton android:id="@+id/btn_tts" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_volume" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="语音" app:tint="@color/black" />
                       </LinearLayout>
                       <TextView android:id="@+id/tv_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerInParent="true" android:text="李尔" android:textSize="16sp" android:textStyle="bold" android:textColor="@color/black" />
@@ -336,7 +342,6 @@ jobs:
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#FFFFFF" android:pathData="M54,38 C42,38 32,45 32,54 C32,63 42,70 54,70 C57,70 60,69.5 63,68.5 L72,72 L69,63 C72.5,60.5 76,57.5 76,54 C76,45 66,38 54,38 Z" /></vector>
           XML_EOF
 
-          # 【重大更新】：加入协程轮询机制，完美支持主动搭话和延时提醒功能！
           cat > app/src/main/java/com/lear/chatbot/MainActivity.kt << 'KT_EOF'
           package com.lear.chatbot
 
@@ -529,7 +534,6 @@ jobs:
                                   }
                                   scrollToBottom(); loadingBar.visibility = View.GONE; btnSend.isEnabled = true; inputMessage.hint = "输入消息..."; checkSystemMessageLock()
                                   
-                                  // 初始化同步当前Python后台消息数量，并启动异步雷达轮询！
                                   lastPollCount = bootstrapModule?.callAttr("get_message_count", currentSession.id)?.toString()?.toIntOrNull() ?: 0
                                   startPolling()
                               }
@@ -538,7 +542,6 @@ jobs:
                   }
               }
 
-              // 【核心轮询引擎】：每秒扫描一次后台新消息（解决提醒和主动搭话不显示问题）
               private fun startPolling() {
                   messagePollJob?.cancel()
                   messagePollJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -561,7 +564,6 @@ jobs:
                                               chatAdapter.addMessage(botMsg)
                                               
                                               if (isTtsEnabled && !botMsg.isSystem && ::tts.isInitialized) {
-                                                  // 彻底剔除所有 Emoji 防止发声
                                                   val cleanForTts = cleanReply.replace(Regex("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+"), "")
                                                   tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch)
                                                   tts.speak(cleanForTts, TextToSpeech.QUEUE_ADD, null, null)
@@ -630,7 +632,6 @@ jobs:
                       } catch (e: Throwable) { 
                           withContext(Dispatchers.Main) { showErrorDialog("环境通信异常", e.stackTraceToString()); loadingBar.visibility = View.GONE } 
                       } 
-                      // 异步机制无需在这里手动关闭 loadingBar，雷达侦测到消息后会自动关闭它
                       delay(3000)
                       withContext(Dispatchers.Main) { loadingBar.visibility = View.GONE }
                   }
@@ -660,7 +661,10 @@ jobs:
                                       for (i in 0 until msgs.length()) {
                                           val text = cleanText(msgs.getString(i)); val chatMsg = ChatMessage(text, isUser = false, isSystem = isSystemMessage(text))
                                           currentSession.messages.add(chatMsg)
-                                          if (isTtsEnabled && !chatMsg.isSystem && ::tts.isInitialized) { tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch); tts.speak(text, TextToSpeech.QUEUE_ADD, null, null) }
+                                          if (isTtsEnabled && !chatMsg.isSystem && ::tts.isInitialized) { 
+                                              val cleanForTts = text.replace(Regex("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+"), "")
+                                              tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch); tts.speak(cleanForTts, TextToSpeech.QUEUE_ADD, null, null) 
+                                          }
                                       }
                                       chatAdapter.setMessages(currentSession.messages)
                                   }
@@ -725,8 +729,9 @@ jobs:
                       val names = availableVoices.map { it.name }.toTypedArray()
                       val currentIdx = availableVoices.indexOfFirst { it.name == selectedVoiceName }.takeIf { it >= 0 } ?: 0
                       AlertDialog.Builder(this@MainActivity).setSingleChoiceItems(names, currentIdx) { d, w ->
-                          selectedVoiceName = names[w]; tts.voice = availableVoices[w]; saveSettings()
-                          // 【即时试听】点选列表即刻发声，无需关掉面板
+                          selectedVoiceName = names[w]
+                          tts.voice = availableVoices[w]
+                          saveSettings()
                           playTtsPreview()
                       }.setPositiveButton("确定", null).show()
                   }
@@ -792,14 +797,10 @@ jobs:
                       val container = LinearLayout(parent.context).apply { 
                           layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                           orientation = LinearLayout.HORIZONTAL; setPadding(0, 16, 0, 16) 
-                          gravity = when(viewType) { TYPE_USER -> Gravity.END; TYPE_SYSTEM -> Gravity.CENTER; else -> Gravity.START }
                       }
                       val bubble = LinearLayout(parent.context).apply { 
-                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                              when(viewType) { TYPE_USER -> setMargins(100, 0, 32, 0); TYPE_SYSTEM -> setMargins(48, 0, 48, 0); else -> setMargins(32, 0, 100, 0) }
-                          }
+                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                           orientation = LinearLayout.VERTICAL
-                          background = ContextCompat.getDrawable(parent.context, when(viewType) { TYPE_USER -> R.drawable.bg_bubble_user; TYPE_BOT -> R.drawable.bg_bubble_bot; TYPE_ERROR -> R.drawable.bg_bubble_error; else -> android.R.color.transparent })
                       }
                       val img = ImageView(parent.context).apply { 
                           layoutParams = LinearLayout.LayoutParams((parent.context.resources.displayMetrics.widthPixels * 0.5).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -808,7 +809,6 @@ jobs:
                       val tv = TextView(parent.context).apply { 
                           layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                           maxWidth = (parent.context.resources.displayMetrics.widthPixels * 0.75).toInt(); setPadding(42, 28, 42, 28); setLineSpacing(6f, 1f) 
-                          setTextColor(ContextCompat.getColor(parent.context, when(viewType) { TYPE_USER, TYPE_ERROR -> R.color.user_text; TYPE_BOT -> R.color.bot_text; else -> R.color.gray_text }))
                       }
                       bubble.addView(img); bubble.addView(tv); container.addView(bubble); return object : RecyclerView.ViewHolder(container) {}
                   }
@@ -822,6 +822,13 @@ jobs:
                       
                       tv.text = msg.text; tv.textSize = if (getItemViewType(pos) == TYPE_SYSTEM) (fontSize - 2).toFloat() else fontSize.toFloat()
                       bubble.setOnLongClickListener { copyToClipboard("已复制文字", msg.text); true }
+
+                      when (getItemViewType(pos)) {
+                          TYPE_USER -> { container.gravity = Gravity.END; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text)); bubble.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_user); (bubble.layoutParams as LinearLayout.LayoutParams).setMargins(100, 0, 32, 0) }
+                          TYPE_BOT -> { container.gravity = Gravity.START; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.bot_text)); bubble.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_bot); (bubble.layoutParams as LinearLayout.LayoutParams).setMargins(32, 0, 100, 0) }
+                          TYPE_ERROR -> { container.gravity = Gravity.START; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.user_text)); bubble.background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_bubble_error); (bubble.layoutParams as LinearLayout.LayoutParams).setMargins(32, 0, 100, 0) }
+                          TYPE_SYSTEM -> { container.gravity = Gravity.CENTER; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text)); bubble.background = null; (bubble.layoutParams as LinearLayout.LayoutParams).setMargins(48, 0, 48, 0) }
+                      }
                   }
                   override fun getItemCount() = messages.size
               }
@@ -856,6 +863,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: 李尔聊天机器人-终极体验版
+          name: 李尔聊天机器人-终极完美典藏版
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
