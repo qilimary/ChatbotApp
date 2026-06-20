@@ -118,16 +118,18 @@ jobs:
           # ── bootstrap.py: sets working directory then delegates ──
           cat > app/src/main/python/bootstrap.py << 'PYEOF'
           # -*- coding: utf-8 -*-
-          import os, sys
+          import os, sys, json
           _app_dir = os.path.dirname(os.path.abspath(__file__))
           os.chdir(_app_dir)
           if _app_dir not in sys.path:
               sys.path.insert(0, _app_dir)
           import lear_main
           def web_start_session():
-              return lear_main.web_start_session()
+              result = lear_main.web_start_session()
+              return json.dumps(result)
           def web_process_message(text, session_id):
-              return lear_main.web_process_message(text, session_id)
+              result = lear_main.web_process_message(text, session_id)
+              return json.dumps(result)
           PYEOF
 
           # ── local.properties ──
@@ -553,8 +555,6 @@ jobs:
           import android.text.Editable
           import android.text.TextWatcher
           import android.view.Gravity
-          import android.view.LayoutInflater
-          import android.view.MotionEvent
           import android.view.View
           import android.view.ViewGroup
           import android.view.inputmethod.InputMethodManager
@@ -596,6 +596,13 @@ jobs:
           )
 
           class MainActivity : AppCompatActivity() {
+
+              companion object {
+                  private const val TYPE_USER = 0
+                  private const val TYPE_BOT = 1
+                  private const val TYPE_ERROR = 2
+                  private const val TYPE_SYSTEM = 3
+              }
 
               private lateinit var drawerLayout: DrawerLayout
               private lateinit var chatRecycler: RecyclerView
@@ -689,19 +696,20 @@ jobs:
                               }
                               val py = Python.getInstance()
                               bootstrapModule = py.getModule("bootstrap")
-                              val result = bootstrapModule?.callAttr("web_start_session")
-                              val resultMap = result?.asMap()
-                              val sid = resultMap?.get("session_id")?.toString()
-                              val msgs = (resultMap?.get("messages") as? com.chaquo.python.PyObject)?.asList()
+                              val resultStr = bootstrapModule?.callAttr("web_start_session")?.toString()
 
                               withContext(Dispatchers.Main) {
-                                  currentSession.id = sid
-                                  msgs?.forEach { msg ->
-                                      val text = cleanText(msg.toString())
-                                      val isSys = isSystemMessage(text)
-                                      val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
-                                      currentSession.messages.add(chatMsg)
-                                      chatAdapter.addMessage(chatMsg)
+                                  if (!resultStr.isNullOrEmpty()) {
+                                      val resultJson = JSONObject(resultStr)
+                                      currentSession.id = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
+                                      val msgs = resultJson.getJSONArray("messages")
+                                      for (i in 0 until msgs.length()) {
+                                          val text = cleanText(msgs.getString(i))
+                                          val isSys = isSystemMessage(text)
+                                          val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
+                                          currentSession.messages.add(chatMsg)
+                                          chatAdapter.addMessage(chatMsg)
+                                      }
                                   }
                                   scrollToBottom()
                                   loadingBar.visibility = View.GONE
@@ -751,16 +759,23 @@ jobs:
                   lifecycleScope.launch {
                       try {
                           val (replies, newSid) = withContext(Dispatchers.IO) {
-                              val result = bootstrapModule?.callAttr("web_process_message", text, sid)
-                              val resultMap = result?.asMap()
-                              val nsid = resultMap?.get("session_id")?.toString()
-                              val reps = (resultMap?.get("replies") as? com.chaquo.python.PyObject)?.asList()
-                              Pair(reps, nsid)
+                              val resultStr = bootstrapModule?.callAttr("web_process_message", text, sid)?.toString()
+                              var nsid: String? = null
+                              val repsList = mutableListOf<String>()
+                              if (!resultStr.isNullOrEmpty()) {
+                                  val resultJson = JSONObject(resultStr)
+                                  nsid = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
+                                  val reps = resultJson.getJSONArray("replies")
+                                  for (i in 0 until reps.length()) {
+                                      repsList.add(reps.getString(i))
+                                  }
+                              }
+                              Pair(repsList, nsid)
                           }
                           if (newSid != null) currentSession.id = newSid
 
-                          replies?.forEach { reply ->
-                              val cleanReply = cleanText(reply.toString())
+                          replies.forEach { reply ->
+                              val cleanReply = cleanText(reply)
                               val isSys = isSystemMessage(cleanReply)
                               val botMsg = ChatMessage(cleanReply, isUser = false, isSystem = isSys)
                               currentSession.messages.add(botMsg)
@@ -806,18 +821,19 @@ jobs:
                   lifecycleScope.launch {
                       try {
                           withContext(Dispatchers.IO) {
-                              val result = bootstrapModule?.callAttr("web_start_session")
-                              val resultMap = result?.asMap()
-                              val sid = resultMap?.get("session_id")?.toString()
-                              val msgs = (resultMap?.get("messages") as? com.chaquo.python.PyObject)?.asList()
+                              val resultStr = bootstrapModule?.callAttr("web_start_session")?.toString()
                               withContext(Dispatchers.Main) {
-                                  currentSession.id = sid
-                                  msgs?.forEach { msg ->
-                                      val text = cleanText(msg.toString())
-                                      val isSys = isSystemMessage(text)
-                                      val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
-                                      currentSession.messages.add(chatMsg)
-                                      chatAdapter.addMessage(chatMsg)
+                                  if (!resultStr.isNullOrEmpty()) {
+                                      val resultJson = JSONObject(resultStr)
+                                      currentSession.id = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
+                                      val msgs = resultJson.getJSONArray("messages")
+                                      for (i in 0 until msgs.length()) {
+                                          val text = cleanText(msgs.getString(i))
+                                          val isSys = isSystemMessage(text)
+                                          val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
+                                          currentSession.messages.add(chatMsg)
+                                          chatAdapter.addMessage(chatMsg)
+                                      }
                                   }
                                   scrollToBottom()
                                   loadingBar.visibility = View.GONE
@@ -1023,13 +1039,6 @@ jobs:
               inner class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                   private val messages = mutableListOf<ChatMessage>()
                   var fontSize: Int = 14
-
-                  companion object {
-                      private const val TYPE_USER = 0
-                      private const val TYPE_BOT = 1
-                      private const val TYPE_ERROR = 2
-                      private const val TYPE_SYSTEM = 3
-                  }
 
                   fun addMessage(msg: ChatMessage) {
                       messages.add(msg)
