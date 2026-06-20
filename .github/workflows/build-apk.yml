@@ -350,6 +350,9 @@ jobs:
           cat > app/src/main/java/com/lear/chatbot/MainActivity.kt << 'KT_EOF'
           package com.lear.chatbot
 
+          import android.content.ClipData
+          import android.content.ClipboardManager
+          import android.content.Context
           import android.os.Bundle
           import android.text.Editable
           import android.text.TextWatcher
@@ -363,6 +366,7 @@ jobs:
           import android.widget.ProgressBar
           import android.widget.SeekBar
           import android.widget.TextView
+          import android.widget.Toast
           import androidx.appcompat.app.AlertDialog
           import androidx.appcompat.app.AppCompatActivity
           import androidx.core.content.ContextCompat
@@ -430,7 +434,12 @@ jobs:
                   if (crashFile.exists()) {
                       val log = crashFile.readText()
                       crashFile.delete()
-                      AlertDialog.Builder(this).setTitle("上次运行时发生崩溃").setMessage(log).setPositiveButton("关闭", null).show()
+                      AlertDialog.Builder(this)
+                          .setTitle("上次运行时发生崩溃")
+                          .setMessage(log)
+                          .setPositiveButton("关闭", null)
+                          .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard("崩溃日志", log) }
+                          .show()
                   }
 
                   bindViews()
@@ -482,7 +491,6 @@ jobs:
                   historyAdapter.onItemLongClick = { showDeleteDialog(it) }
               }
 
-              // 【核心修复：将资源文件解压到真实的文件夹系统，供纯Python调用】
               private suspend fun extractAssetsToDisk(): String {
                   return withContext(Dispatchers.IO) {
                       val destDir = File(filesDir, "chatbot")
@@ -517,7 +525,6 @@ jobs:
                               }
                               val py = Python.getInstance()
                               bootstrapModule = py.getModule("bootstrap")
-                              // 启动 Python 并传入解压路径
                               val resultStr = bootstrapModule?.callAttr("init_backend", realFilesDir)?.toString()
 
                               withContext(Dispatchers.Main) {
@@ -737,7 +744,15 @@ jobs:
                       .setTitle(title)
                       .setMessage(message)
                       .setPositiveButton("确定", null)
+                      .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }
                       .show()
+              }
+
+              private fun copyToClipboard(label: String, text: String) {
+                  val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                  val clip = ClipData.newPlainText(label, text)
+                  clipboard.setPrimaryClip(clip)
+                  Toast.makeText(this, "已复制到剪贴板，请发给开发者", Toast.LENGTH_SHORT).show()
               }
 
               private fun showFontSizeDialog() {
@@ -832,7 +847,8 @@ jobs:
 
                   override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
                       val tv = TextView(parent.context)
-                      tv.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                      // 【修复布局闪退的地方】: 使用 MarginLayoutParams
+                      tv.layoutParams = ViewGroup.MarginLayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                       tv.setPadding(48, 28, 48, 28)
                       tv.setLetterSpacing(0.01f)
                       tv.setLineSpacing(4f, 1f)
@@ -908,3 +924,4 @@ jobs:
           name: 李尔聊天机器人-APK
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
+
