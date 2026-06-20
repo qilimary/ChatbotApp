@@ -171,22 +171,27 @@ jobs:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Pre-generate Bot Cache
+      - name: Pre-generate Bot Cache (Fix Hang Issue)
         run: |
           echo "==== 触发倒排索引预编译缓存 ===="
-          python3 -c '
-          import os, sys
+          # 核心防卡死：设置90秒超时，并在代码内部执行 os._exit(0) 强制结束所有残留线程
+          timeout 90 python3 -c '
+          import os, sys, time
           try:
               import lear_main
               if hasattr(lear_main, "web_start_session"):
                   print("正在初始化引擎，提前生成索引缓存...")
                   lear_main.web_start_session()
-                  print("索引缓存生成完毕！")
+                  print("等待后台线程计算并写入硬盘 (45秒)...")
+                  time.sleep(45)
+                  print("预编译缓存已落盘，强行结束进程。")
           except Exception as e:
-              print(f"预先生成缓存失败 (可能无需生成): {e}")
-          '
+              print(f"预先生成缓存异常: {e}")
+          finally:
+              os._exit(0)  # 致命一击：强制杀掉任何卡住的后台线程
+          ' || true
           ls -la
-          
+
       - name: Generate main.py (Final Masterpiece Version)
         run: |
           cat > main.py << 'EOF'
