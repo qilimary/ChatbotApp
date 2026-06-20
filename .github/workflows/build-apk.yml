@@ -81,7 +81,7 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Auto-patch source code (Advanced Memory & Memory Fixes)
+      - name: Auto-patch source code (Fix SyntaxError & Memory)
         run: |
           python3 -c '
           import os, re
@@ -90,7 +90,7 @@ jobs:
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               new_content = content
               
-              # 1. 基础性能优化与修复
+              # 1. 基础性能优化
               new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
               new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
               new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
@@ -100,19 +100,19 @@ jobs:
               )
               new_content = new_content.replace("# self.messages.append(str(text))", "self.messages.append(str(text))")
               
-              # 2. 注入跨窗口全局记忆（单例模式）
+              # 2. 修复转义 Bug：不再使用 r"..."，使用标准字符串双重转义，确保完美注入单例模式
               new_content = re.sub(
                   r"(self\.name_handler\s*=\s*(NameHandler\([^)]*\)))", 
-                  r"global _g_name; _g_name = globals().get(\"_g_name\") or \2; self.name_handler = _g_name", 
+                  "global _g_name; _g_name = globals().get(\"_g_name\") or \\2; self.name_handler = _g_name", 
                   new_content
               )
               new_content = re.sub(
                   r"(self\.preference_handler\s*=\s*(PreferenceHandler\([^)]*\)))", 
-                  r"global _g_pref; _g_pref = globals().get(\"_g_pref\") or \2; self.preference_handler = _g_pref", 
+                  "global _g_pref; _g_pref = globals().get(\"_g_pref\") or \\2; self.preference_handler = _g_pref", 
                   new_content
               )
 
-              # 3. 注入深度内存释放机制
+              # 3. 注入深度内存释放机制 (强制 GC)
               if "def web_process_message" in new_content:
                   new_content = new_content.replace(
                       "return {\n        \"session_id\"", 
@@ -139,9 +139,10 @@ jobs:
             [ -f "$f" ] && cp -n "$f" app/src/main/assets/chatbot/ 2>/dev/null || true
           done
 
+          # 加入了 gc.collect() 保护内存
           cat > app/src/main/python/bootstrap.py << 'PYEOF'
           # -*- coding: utf-8 -*-
-          import os, sys, json, traceback
+          import os, sys, json, traceback, gc
           _lear_main = None
 
           def init_backend(files_dir):
@@ -152,6 +153,7 @@ jobs:
                   import lear_main
                   _lear_main = lear_main
                   result = _lear_main.web_start_session()
+                  gc.collect()
                   return json.dumps(result)
               except Exception as e:
                   return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
@@ -162,6 +164,7 @@ jobs:
                   return json.dumps({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
               try:
                   result = _lear_main.web_process_message(text, session_id)
+                  gc.collect()
                   return json.dumps(result)
               except Exception as e:
                   return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
@@ -504,7 +507,6 @@ jobs:
 
               private fun processImage(uri: android.net.Uri) {
                   try {
-                      // 将缩略图气泡加在右侧，当做用户发的消息
                       val userMsg = ChatMessage("", isUser = true, imageUri = uri.toString())
                       currentSession.messages.add(userMsg); chatAdapter.addMessage(userMsg)
                       scrollToBottom(); saveAllHistory(); refreshHistory()
@@ -540,7 +542,6 @@ jobs:
                   val userMsg = ChatMessage(text, isUser = true); currentSession.messages.add(userMsg); chatAdapter.addMessage(userMsg)
                   scrollToBottom(); saveAllHistory(); refreshHistory()
 
-                  // 【解锁输入框】：只禁用发送按钮，允许继续输入
                   isProcessing = true; btnSend.text = "发送中"; btnSend.isEnabled = false; loadingBar.visibility = View.VISIBLE
 
                   val sid = currentSession.id
@@ -610,8 +611,8 @@ jobs:
                   drawerLayout.closeDrawer(Gravity.START); if (session === currentSession) return
                   tts.stop()
                   currentSession = session; chatAdapter.clearMessages(); isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
-                  inputMessage.isEnabled = true; inputMessage.hint = "输入消息..."; session.messages.forEach { chatAdapter.addMessage(it) }
-                  scrollToBottom(); refreshHistory(); checkSystemMessageLock() // 不再置顶，保留位置
+                  inputMessage.hint = "输入消息..."; session.messages.forEach { chatAdapter.addMessage(it) }
+                  scrollToBottom(); refreshHistory(); checkSystemMessageLock()
               }
 
               private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
@@ -643,7 +644,7 @@ jobs:
                   val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 32, 48, 16) }
                   val switchTts = Switch(this).apply { text = "开启语音播报"; isChecked = isTtsEnabled; setPadding(0, 0, 0, 32); textSize = 16f }
                   
-                  val btnVoice = MaterialButton(this).apply { text = "选择本地音色库 (${availableVoices.size}种)"; setPadding(0, 0, 0, 16) }
+                  val btnVoice = MaterialButton(this).apply { text = "选择本地音色 (${availableVoices.size}种)"; setPadding(0, 0, 0, 16) }
                   btnVoice.setOnClickListener {
                       if (availableVoices.isEmpty()) { Toast.makeText(this@MainActivity, "手机未安装中文语音包", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
                       val names = availableVoices.map { it.name }.toTypedArray()
