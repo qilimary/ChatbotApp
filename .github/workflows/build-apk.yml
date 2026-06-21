@@ -39,7 +39,7 @@ jobs:
 
       - name: Download chatbot zip
         run: |
-          gdown 'https://drive.google.com/uc?id=1r3OE4JoEUI-12_yxxNDlgXsKFrClm1tH' -O 机器人.zip
+          gdown 'https://drive.google.com/uc?id=1aHHUK-CXqK1sYIh9CwrZUWYPigITAj3h' -O 机器人.zip
           unzip -o 机器人.zip -d 机器人解压/
 
       - name: Extract chatbot files
@@ -81,67 +81,6 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Auto-patch source code (Fix Memory, Async Messages & Crash)
-        run: |
-          python3 -c '
-          import os, re
-          for fname in os.listdir("."):
-              if not fname.endswith(".py"): continue
-              with open(fname, "r", encoding="utf-8") as f: content = f.read()
-              
-              # 注入全局异步队列
-              new_content = "global_async_queue = []\n" + content
-              
-              new_content = re.sub(r"self\.use_parallel\s*=\s*.+", "self.use_parallel = False", new_content)
-              new_content = re.sub(r"self\.max_workers\s*=\s*.+", "self.max_workers = 1", new_content)
-              new_content = new_content.replace("self._index_ready_event.wait()", "self._index_ready_event.wait(timeout=15.0)")
-              new_content = new_content.replace(
-                  "self.bonus_terms.items()", 
-                  "(self.bonus_terms.items() if hasattr(self.bonus_terms, \"items\") else {k: 1.0 for k in self.bonus_terms if isinstance(k, str)}.items())"
-              )
-              new_content = new_content.replace("# self.messages.append(str(text))", "self.messages.append(str(text))")
-              
-              new_content = re.sub(
-                  r"(self\.name_handler\s*=\s*(NameHandler\([^)]*\)))", 
-                  "global _g_name; _g_name = globals().get(\"_g_name\") or \\2; self.name_handler = _g_name", 
-                  new_content
-              )
-              new_content = re.sub(
-                  r"(self\.preference_handler\s*=\s*(PreferenceHandler\([^)]*\)))", 
-                  "global _g_pref; _g_pref = globals().get(\"_g_pref\") or \\2; self.preference_handler = _g_pref", 
-                  new_content
-              )
-
-              new_content = new_content.replace("strip_emoji(strip_ansi(bot_response))", "strip_ansi_codes(bot_response)")
-              new_content = new_content.replace("strip_ansi(text)", "strip_ansi_codes(text)")
-              new_content = new_content.replace("visible_len(bot_response, ignore_ansi=True, ignore_emoji=True)", "len(bot_response)")
-              new_content = new_content.replace("with print_lock:", "if True: # print_lock bypassed")
-              
-              # 【修复问题1】：内存占用的按需隔离，单会话限制
-              new_content = new_content.replace("max_sessions=100", "max_sessions=1")
-              
-              # 【修复问题2】：将 ReminderBot 等后台线程消息劫持到全局队列中，供 Android 轮询抓取
-              new_content = new_content.replace("self.setup_daily_reminders()", "pass # Disabled daily to save battery")
-              new_content = new_content.replace(
-                  "self.type_like_human(reminder_message)",
-                  "self.type_like_human(reminder_message); [global_async_queue.append(reminder_message) if 'global_async_queue' in globals() else None]"
-              )
-              new_content = new_content.replace(
-                  "self.type_like_human(warning_message)",
-                  "self.type_like_human(warning_message); [global_async_queue.append(warning_message) if 'global_async_queue' in globals() else None]"
-              )
-              new_content = new_content.replace(
-                  "self.type_like_human(topic)",
-                  "self.type_like_human(topic); [global_async_queue.append(topic) if 'global_async_queue' in globals() else None]"
-              )
-
-              # 【修复问题3】：修复 SemanticEmotionAnalyzer 触发 TypeError 导致应用崩溃的问题
-              new_content = re.sub(r"get_sentence_vector\(([^,]+),\s*sim_calc\.char_idf\)", r"get_sentence_vector(\1)", new_content)
-
-              if new_content != content:
-                  with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
-          '
-
       - name: Generate Android Project Structure
         run: |
           set -e
@@ -171,7 +110,6 @@ jobs:
                   import lear_main
                   _lear_main = lear_main
                   
-                  # 按需清理内存：每次建立新会话强力干掉旧数据
                   if hasattr(_lear_main, 'WEB_SESSION_MANAGER'):
                       _lear_main.WEB_SESSION_MANAGER.sessions.clear()
                   if hasattr(_lear_main, 'global_async_queue'):
@@ -197,7 +135,6 @@ jobs:
               except Exception as e:
                   return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
 
-          # 供 Android Kotlin 拉取异步线程的弹窗气泡（提醒功能专用）
           def poll_async():
               global _lear_main
               if _lear_main is None or not hasattr(_lear_main, 'global_async_queue'):
@@ -290,7 +227,7 @@ jobs:
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
                           <TextView android:id="@+id/btn_font" android:layout_width="44dp" android:layout_height="match_parent" android:text="字体" android:textSize="14sp" android:textColor="@color/black" android:gravity="center" android:background="?attr/selectableItemBackgroundBorderless" android:clickable="true" android:focusable="true" />
-                          <TextView android:id="@+id/btn_tts" android:layout_width="44dp" android:layout_height="match_parent" android:text="语音" android:textSize="14sp" android:textColor="@color/black" android:gravity="center" android:background="?attr/selectableItemBackgroundBorderless" android:clickable="true" android:focusable="true" />
+                          <ImageButton android:id="@+id/btn_tts" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_wave" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="语音设置" app:tint="@color/black" />
                       </LinearLayout>
                       <TextView android:id="@+id/tv_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerInParent="true" android:text="李尔" android:textSize="16sp" android:textStyle="bold" android:textColor="@color/black" />
                       <ImageButton android:id="@+id/btn_new_session" android:layout_width="44dp" android:layout_height="match_parent" android:layout_alignParentEnd="true" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
@@ -312,6 +249,9 @@ jobs:
           </androidx.drawerlayout.widget.DrawerLayout>
           XML_EOF
 
+          cat > app/src/main/res/drawable/ic_wave.xml << 'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M11,3h2v18h-2V3z M7,8h2v8H7V8z M15,8h2v8h-2V8z M3,11h2v2H3v-2z M19,11h2v2h-2v-2z" /></vector>
+          XML_EOF
           cat > app/src/main/res/drawable/ic_image.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M21,19V5c0,-1.1 -0.9,-2 -2,-2H5C3.9,3 3,3.9 3,5v14c0,1.1 0.9,2 2,2h14C20.1,21 21,20.1 21,19zM8.5,13.5l2.5,3.01L14.5,12l4.5,6H5L8.5,13.5z" /></vector>
           XML_EOF
@@ -408,7 +348,7 @@ jobs:
               private lateinit var btnClearAll: MaterialButton
               private lateinit var btnNewSession: ImageButton
               private lateinit var btnFontSize: TextView
-              private lateinit var btnTts: TextView
+              private lateinit var btnTts: ImageButton
               private lateinit var btnMenu: ImageButton
               private lateinit var btnImage: ImageButton
               private lateinit var loadingBar: ProgressBar
@@ -659,7 +599,6 @@ jobs:
                   currentSession = ChatSession(); isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
                   inputMessage.hint = "输入消息..."; drawerLayout.closeDrawer(Gravity.START)
                   
-                  // 批量清空UI避免卡顿
                   chatAdapter.setMessages(currentSession.messages)
                   
                   if (bootstrapModule == null) return
@@ -694,7 +633,6 @@ jobs:
                   tts.stop()
                   currentSession = session; isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
                   inputMessage.hint = "输入消息..."
-                  // 批量设置历史记录，解决老版本一条条插入导致的渲染卡顿！
                   chatAdapter.setMessages(session.messages)
                   scrollToBottom(); refreshHistory(); checkSystemMessageLock()
               }
@@ -741,7 +679,6 @@ jobs:
                       if (availableVoices.isEmpty()) { Toast.makeText(this@MainActivity, "手机未安装中文语音包", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
                       val names = availableVoices.map { it.name }.toTypedArray()
                       val currentIdx = availableVoices.indexOfFirst { it.name == selectedVoiceName }.takeIf { it >= 0 } ?: 0
-                      // 【修复音色切换 BUG，提供独立选单并能现场试听】
                       AlertDialog.Builder(this@MainActivity).setSingleChoiceItems(names, currentIdx) { d, w ->
                           selectedVoiceName = names[w]
                           tts.voice = availableVoices[w]
@@ -800,7 +737,6 @@ jobs:
               private fun cleanText(text: String): String = text.replace("\\n", "\n").replace("\\r", "").trim()
               private fun scrollToBottom() { chatRecycler.post { val pos = chatAdapter.itemCount - 1; if (pos >= 0) chatRecycler.smoothScrollToPosition(pos) } }
 
-              // 【史诗级渲染优化】：彻底缓存视图配置，大幅减少重新创建 UI 的掉帧开销
               inner class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                   private val messages = mutableListOf<ChatMessage>(); var fontSize: Int = 14
                   fun addMessage(msg: ChatMessage) { messages.add(msg); notifyItemInserted(messages.size - 1) }
@@ -822,7 +758,7 @@ jobs:
                           background = ContextCompat.getDrawable(parent.context, when(viewType) { TYPE_USER -> R.drawable.bg_bubble_user; TYPE_BOT -> R.drawable.bg_bubble_bot; TYPE_ERROR -> R.drawable.bg_bubble_error; else -> android.R.color.transparent })
                       }
                       val img = ImageView(parent.context).apply { 
-                          layoutParams = LinearLayout.LayoutParams((parent.context.resources.displayMetrics.widthPixels * 0.5).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+                          layoutParams = LinearLayout.LayoutParams((parent.context.resources.displayMetrics.widthPixels * 0.35).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
                           adjustViewBounds = true; visibility = View.GONE; setPadding(16, 16, 16, 16) 
                       }
                       val tv = TextView(parent.context).apply { 
