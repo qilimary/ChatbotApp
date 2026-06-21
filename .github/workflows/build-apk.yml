@@ -549,11 +549,11 @@ jobs:
                                   val botMsg = ChatMessage(finalResult.trim(), isUser = false, isSystem = false)
                                   currentSession.messages.add(botMsg); chatAdapter.addMessage(botMsg)
                                   scrollToBottom(); saveAllHistory(); refreshHistory()
-                              } else { Toast.makeText(this, "未能识别到任何内容", Toast.LENGTH_SHORT).show() }
+                              } else { Toast.makeText(this@MainActivity, "未能识别到任何内容", Toast.LENGTH_SHORT).show() }
                               loadingBar.visibility = View.GONE
-                          }.addOnFailureListener { loadingBar.visibility = View.GONE; Toast.makeText(this, "图片识别失败", Toast.LENGTH_SHORT).show() }
+                          }.addOnFailureListener { loadingBar.visibility = View.GONE; Toast.makeText(this@MainActivity, "图片识别失败", Toast.LENGTH_SHORT).show() }
                       }
-                  } catch (e: Exception) { Toast.makeText(this, "图片处理异常", Toast.LENGTH_SHORT).show(); loadingBar.visibility = View.GONE }
+                  } catch (e: Exception) { Toast.makeText(this@MainActivity, "图片处理异常", Toast.LENGTH_SHORT).show(); loadingBar.visibility = View.GONE }
               }
 
               private fun sendMessage() {
@@ -651,21 +651,20 @@ jobs:
               private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
               private fun isSystemMessage(text: String): Boolean = text.startsWith("【") && text.endsWith("】")
               
-              // 修复的结束逻辑：保留一次输入机会
               private fun checkSystemMessageLock() {
                   val endSysIdx = currentSession.messages.indexOfLast { it.isSystem && it.text.contains("会话已结束") }
                   if (endSysIdx != -1) {
                       val userMsgsAfterEnd = currentSession.messages.subList(endSysIdx + 1, currentSession.messages.size).count { it.isUser }
                       if (userMsgsAfterEnd >= 1) {
                           btnSend.isEnabled = false; inputMessage.isEnabled = false
-                          inputMessage.hint = "对话已结束"
+                          inputMessage.hint = "对话已彻底锁定"
                       } else {
                           inputMessage.isEnabled = true
-                          inputMessage.hint = "对话已结束"
+                          inputMessage.hint = "对话已结束(还可发送最后一条)"
                       }
                   } else {
                       inputMessage.isEnabled = true
-                      if (inputMessage.hint.toString().contains("结束") || inputMessage.hint.toString().contains("锁定") || inputMessage.hint == "正在加载...") {
+                      if (inputMessage.hint.toString().contains("结束") || inputMessage.hint.toString().contains("锁定") || inputMessage.hint.toString() == "正在加载...") {
                           inputMessage.hint = "输入消息..."
                       }
                   }
@@ -709,7 +708,12 @@ jobs:
                   sliderSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(sb: SeekBar?, p: Int, b: Boolean) { ttsSpeed = 0.5f + p / 10f; lblSpeed.text = "语速: ${"%.1f".format(ttsSpeed)}x" } override fun onStartTrackingTouch(sb: SeekBar?) {} override fun onStopTrackingTouch(sb: SeekBar?) {} })
                   sliderPitch.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(sb: SeekBar?, p: Int, b: Boolean) { ttsPitch = 0.5f + p / 10f; lblPitch.text = "音调: ${"%.1f".format(ttsPitch)}x" } override fun onStartTrackingTouch(sb: SeekBar?) {} override fun onStopTrackingTouch(sb: SeekBar?) {} })
 
-                  val btnPreview = MaterialButton(this).apply { text = "🔊试听"; setPadding(0, 16, 0, 0); app.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E0E0E0")); setTextColor(Color.BLACK) }
+                  val btnPreview = MaterialButton(this).apply { 
+                      text = "🔊 试听当前声音"
+                      setPadding(0, 16, 0, 0)
+                      backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E0E0E0"))
+                      setTextColor(Color.BLACK) 
+                  }
                   btnPreview.setOnClickListener {
                       if (::tts.isInitialized) {
                           tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch)
@@ -874,4 +878,3 @@ jobs:
           name: 李尔聊天机器人-视觉与高亮版
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
-
