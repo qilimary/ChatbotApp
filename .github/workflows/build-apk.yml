@@ -39,7 +39,7 @@ jobs:
 
       - name: Download chatbot zip
         run: |
-          gdown 'https://drive.google.com/uc?id=1aHHUK-CXqK1sYIh9CwrZUWYPigITAj3h' -O 机器人.zip
+          gdown 'https://drive.google.com/file/d/1NMGrsfWgfDJwyVLsg7AueUzSWvv-XG0z/view?usp=drivesdk' -O 机器人.zip
           unzip -o 机器人.zip -d 机器人解压/
 
       - name: Extract chatbot files
@@ -99,10 +99,10 @@ jobs:
               # 修复 SemanticEmotionAnalyzer 报错导致选择题崩盘
               new_content = re.sub(r"get_sentence_vector\(([^,]+),\s*sim_calc\.char_idf\)", r"get_sentence_vector(\1)", new_content)
               
-              # 【关键修复1】：让短句合并逻辑支持可见长度，防止被不可见 ANSI 颜色码撑爆长度导致 Emoji 被孤立分割
+              # 让短句合并逻辑支持可见长度，防止被不可见 ANSI 颜色码撑爆长度导致 Emoji 被孤立分割
               new_content = re.sub(r"if len\(part\)\s*<\s*min_len:", "if visible_len(part) < min_len:", new_content)
               
-              # 【关键修复2】：强制底层引擎识别为 Web 模式，彻底阻断终端 `time.sleep` 或多线程导致的异步队列消息阻塞“被吃掉”问题
+              # 强制底层引擎识别为 Web 模式，彻底阻断终端 `time.sleep` 导致的异步队列消息阻塞“被吃掉”问题
               new_content = re.sub(r"self\.is_web_mode\s*=\s*not\s*\(.*?\)", "self.is_web_mode = True", new_content)
 
               if new_content != content:
@@ -202,7 +202,7 @@ jobs:
           android {
               namespace 'com.lear.chatbot'; compileSdk 34
               defaultConfig {
-                  applicationId "com.lear.chatbot"; minSdk 26; targetSdk 34; versionCode 1; versionName "2.0.0"
+                  applicationId "com.lear.chatbot"; minSdk 26; targetSdk 34; versionCode 1; versionName "2.0.1"
                   ndk { abiFilters "arm64-v8a" }; python { version "3.10" }
               }
               buildTypes { release { minifyEnabled false } }
@@ -264,8 +264,10 @@ jobs:
                           <ImageButton android:id="@+id/btn_new_session" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
                       </LinearLayout>
                   </RelativeLayout>
-                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="12dp" android:paddingBottom="12dp" app:fastScrollEnabled="true" app:fastScrollVerticalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollVerticalTrackDrawable="@drawable/fastscroll_track" app:fastScrollHorizontalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollHorizontalTrackDrawable="@drawable/fastscroll_track" />
+                  <!-- 聊天列表 -->
+                  <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="2dp" android:paddingTop="12dp" android:paddingBottom="12dp" app:fastScrollEnabled="true" app:fastScrollVerticalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollVerticalTrackDrawable="@drawable/fastscroll_track" app:fastScrollHorizontalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollHorizontalTrackDrawable="@drawable/fastscroll_track" />
                   <ProgressBar android:id="@+id/loading_bar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" android:indeterminateTint="@color/accent_blue" />
+                  <!-- 底部输入区 -->
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="8dp" android:background="@color/white" android:elevation="4dp" android:gravity="center_vertical">
                       <ImageButton android:id="@+id/btn_image" android:layout_width="40dp" android:layout_height="40dp" android:src="@drawable/ic_image" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="上传图片" app:tint="@color/black" />
                       <EditText android:id="@+id/input_message" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="4dp" android:hint="正在加载..." android:textColorHint="@color/gray_text" android:background="@drawable/bg_input" android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="10dp" android:paddingBottom="10dp" android:textSize="15sp" android:textColor="@color/black" android:maxLines="4" android:inputType="textMultiLine|textCapSentences" android:imeOptions="actionSend" />
@@ -273,7 +275,7 @@ jobs:
                   </LinearLayout>
               </LinearLayout>
               <LinearLayout android:layout_width="300dp" android:layout_height="match_parent" android:layout_gravity="start" android:orientation="vertical" android:background="@color/white" android:fitsSystemWindows="true">
-                  <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:text="最近对话" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
+                  <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:text="最近对话（15条）" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
                   <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border_gray" />
                   <androidx.recyclerview.widget.RecyclerView android:id="@+id/history_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
                   <com.google.android.material.button.MaterialButton android:id="@+id/btn_clear_all" android:layout_width="match_parent" android:layout_height="52dp" android:text="清空所有记录" android:textColor="@color/white" android:insetTop="0dp" android:insetBottom="0dp" app:backgroundTint="@color/error_red" app:cornerRadius="0dp" />
@@ -281,17 +283,46 @@ jobs:
           </androidx.drawerlayout.widget.DrawerLayout>
           XML_EOF
 
+          # ================= 优化版 FastScroll 拇指滑块（视觉极小，触摸面积超大） =================
+          cat > app/src/main/res/drawable/fastscroll_thumb.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <selector xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:state_pressed="true">
+                  <layer-list>
+                      <!-- 隐形的巨型防误触点击区 -->
+                      <item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item>
+                      <!-- 视觉上的小滑块，靠右对齐 -->
+                      <item android:gravity="end|center_vertical" android:left="32dp">
+                          <shape><solid android:color="#007AFF"/><corners android:radius="4dp"/><size android:width="8dp" android:height="60dp"/></shape>
+                      </item>
+                  </layer-list>
+              </item>
+              <item>
+                  <layer-list>
+                      <item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item>
+                      <item android:gravity="end|center_vertical" android:left="34dp">
+                          <shape><solid android:color="#A0A0A0"/><corners android:radius="3dp"/><size android:width="6dp" android:height="60dp"/></shape>
+                      </item>
+                  </layer-list>
+              </item>
+          </selector>
+          XML_EOF
+          
+          # ================= 优化版 FastScroll 轨道 =================
+          cat > app/src/main/res/drawable/fastscroll_track.xml << 'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <!-- 配合滑块的隐形宽幅轨道 -->
+              <solid android:color="#00000000"/>
+              <size android:width="40dp"/>
+          </shape>
+          XML_EOF
+
           cat > app/src/main/res/drawable/ic_wave.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M11,3h2v18h-2V3z M7,8h2v8H7V8z M15,8h2v8h-2V8z M3,11h2v2H3v-2z M19,11h2v2h-2v-2z" /></vector>
           XML_EOF
           cat > app/src/main/res/drawable/ic_image.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M21,19V5c0,-1.1 -0.9,-2 -2,-2H5C3.9,3 3,3.9 3,5v14c0,1.1 0.9,2 2,2h14C20.1,21 21,20.1 21,19zM8.5,13.5l2.5,3.01L14.5,12l4.5,6H5L8.5,13.5z" /></vector>
-          XML_EOF
-          cat > app/src/main/res/drawable/fastscroll_thumb.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><selector xmlns:android="http://schemas.android.com/apk/res/android"><item android:state_pressed="true"><shape android:shape="rectangle"><solid android:color="#007AFF"/><corners android:radius="4dp"/><size android:width="8dp" android:height="60dp"/></shape></item><item><shape android:shape="rectangle"><solid android:color="#A0A0A0"/><corners android:radius="2dp"/><size android:width="4dp" android:height="60dp"/></shape></item></selector>
-          XML_EOF
-          cat > app/src/main/res/drawable/fastscroll_track.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="@android:color/transparent"/><size android:width="20dp"/></shape>
           XML_EOF
           cat > app/src/main/res/drawable/bg_input.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/input_bg" /><corners android:radius="14dp" /></shape>
@@ -312,25 +343,18 @@ jobs:
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></vector>
           XML_EOF
           
-          # ================= 极度清新的拟物风浅色头像图标 =================
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/ic_launcher_bg" /><foreground android:drawable="@drawable/ic_launcher_fg" /></adaptive-icon>
           XML_EOF
           cat > app/src/main/res/drawable/ic_launcher_bg.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android">
-              <!-- 极光浅蓝过渡渐变色 -->
               <gradient android:angle="45" android:startColor="#E0F2FE" android:endColor="#7DD3FC" android:type="linear" />
           </shape>
           XML_EOF
           cat > app/src/main/res/drawable/ic_launcher_fg.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-              <!-- 可爱的圆角机器大脑结构 -->
-              <path android:fillColor="#0284C7" android:pathData="M34,44 C34,36 40,30 54,30 C68,30 74,36 74,44 L74,64 C74,72 68,78 54,78 C40,78 34,72 34,64 Z" />
-              <!-- 发光的眼睛点缀 -->
-              <path android:fillColor="#FFFFFF" android:pathData="M44,50 A4,4 0 1,1 44,58 A4,4 0 1,1 44,50 M64,50 A4,4 0 1,1 64,58 A4,4 0 1,1 64,50" />
-              <!-- 拟物化嘴角微笑 -->
-              <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:strokeLineCap="round" android:pathData="M50,66 L58,66" />
+              <path android:strokeColor="#FFFFFF" android:strokeWidth="12" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M 42,32 V 76 H 66" />
           </vector>
           XML_EOF
 
@@ -345,6 +369,7 @@ jobs:
           import android.os.Bundle
           import android.speech.tts.TextToSpeech
           import android.text.Editable
+          import android.text.Spannable
           import android.text.SpannableStringBuilder
           import android.text.TextWatcher
           import android.text.style.ForegroundColorSpan
@@ -393,7 +418,10 @@ jobs:
           data class ChatSession(var id: String? = null, var preview: String = "新对话", var messages: MutableList<ChatMessage> = mutableListOf())
 
           class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
-              companion object { private const val TYPE_USER = 0; private const val TYPE_BOT = 1; private const val TYPE_ERROR = 2; private const val TYPE_SYSTEM = 3 }
+              companion object { 
+                  private const val TYPE_USER = 0; private const val TYPE_BOT = 1; private const val TYPE_ERROR = 2; private const val TYPE_SYSTEM = 3 
+                  private val ANSI_REGEX = Regex("\u001B\\[[0-9;]*[a-zA-Z]")
+              }
               private lateinit var drawerLayout: DrawerLayout
               private lateinit var chatRecycler: RecyclerView
               private lateinit var historyRecycler: RecyclerView
@@ -415,7 +443,7 @@ jobs:
               private var isProcessing = false
               
               private var chatFontSize = 14
-              private var isTypewriterEnabled = true
+              private var isTypewriterEnabled = false
               
               private var pollingJob: kotlinx.coroutines.Job? = null
 
@@ -489,7 +517,11 @@ jobs:
                   inputMessage.addTextChangedListener(object : TextWatcher {
                       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                       override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                      override fun afterTextChanged(s: Editable?) { btnSend.isEnabled = !s.isNullOrBlank() && !isProcessing && bootstrapModule != null }
+                      override fun afterTextChanged(s: Editable?) { 
+                          if (currentSession.messages.size < 300) {
+                              btnSend.isEnabled = !s.isNullOrBlank() && !isProcessing && bootstrapModule != null 
+                          }
+                      }
                   })
 
                   inputMessage.setOnEditorActionListener { _, actionId, _ ->
@@ -503,6 +535,9 @@ jobs:
               private fun setupRecyclerViews() {
                   chatRecycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = false }
                   chatRecycler.adapter = chatAdapter; chatAdapter.fontSize = chatFontSize
+                  // 【性能优化】：扩大底层 RecyclerView 的缓存池大小，提升快速滑动大文本时的渲染流畅度
+                  chatRecycler.setItemViewCacheSize(15) 
+                  
                   historyRecycler.layoutManager = LinearLayoutManager(this); historyRecycler.adapter = historyAdapter
                   historyAdapter.onItemClick = { loadSession(it) }; historyAdapter.onItemLongClick = { showDeleteDialog(it) }
               }
@@ -591,10 +626,8 @@ jobs:
               private suspend fun animateTypewriter(botMsg: ChatMessage, fullText: String) {
                   val fullSpan = parseAnsiToSpannable(fullText)
                   val len = fullSpan.length
-                  
-                  var currentDelay = 35f // 初始最高延迟
-                  val minDelay = 2f      // 极速极限延迟
-                  // 根据全长计算加速度，文本越长，加速度越大
+                  var currentDelay = 35f 
+                  val minDelay = 2f      
                   val acceleration = if (len > 0) (35f - 2f) / len else 0f
 
                   for (i in 1..len) {
@@ -605,17 +638,12 @@ jobs:
                           if (i % 8 == 0) chatRecycler.smoothScrollToPosition(pos)
                       }
                       
-                      // 动态加速
                       currentDelay = kotlin.math.max(minDelay, currentDelay - acceleration)
                       var pause = currentDelay.toLong()
                       
-                      // 遇到标点微小停顿，增强人类真实打字节奏感
                       val char = fullSpan[i - 1]
-                      if (char == '。' || char == '！' || char == '？' || char == '\n') {
-                          pause += 150L
-                      } else if (char == '，' || char == '、') {
-                          pause += 80L
-                      }
+                      if (char == '。' || char == '！' || char == '？' || char == '\n') pause += 150L
+                      else if (char == '，' || char == '、') pause += 80L
                       delay(pause)
                   }
                   
@@ -648,8 +676,7 @@ jobs:
                                   val pos = currentSession.messages.indexOf(botMsg)
                                   if (pos != -1) chatAdapter.notifyItemChanged(pos, "typing")
                               }
-                              
-                              scrollToBottom(); saveAllHistory(); refreshHistory()
+                              scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock()
                           } else { Toast.makeText(this@MainActivity, "图片中未找到任何文字", Toast.LENGTH_SHORT).show() }
                           loadingBar.visibility = View.GONE
                       }.addOnFailureListener { loadingBar.visibility = View.GONE; Toast.makeText(this@MainActivity, "图片识别失败", Toast.LENGTH_SHORT).show() }
@@ -716,6 +743,10 @@ jobs:
               private fun startNewSession() {
                   if (currentSession.messages.isEmpty()) { drawerLayout.closeDrawer(Gravity.START); return }
                   tts.stop()
+                  
+                  // 【内存优化】释放之前界面的复杂 UI Spannable 对象，仅保留纯文本对象省内存
+                  histories.forEach { if (it !== currentSession) it.messages.forEach { m -> m.displaySpannable = null } }
+                  
                   currentSession = ChatSession(); isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
                   inputMessage.hint = "输入消息..."; drawerLayout.closeDrawer(Gravity.START)
                   
@@ -752,6 +783,10 @@ jobs:
               private fun loadSession(session: ChatSession) {
                   drawerLayout.closeDrawer(Gravity.START); if (session === currentSession) return
                   tts.stop()
+                  
+                  // 【内存优化】释放之前界面的复杂 UI Spannable 对象，仅保留纯文本对象省内存
+                  histories.forEach { if (it !== session) it.messages.forEach { m -> m.displaySpannable = null } }
+                  
                   currentSession = session; isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
                   inputMessage.hint = "输入消息..."
                   session.messages.forEach { if (it.displaySpannable == null && !it.isUser) it.displaySpannable = parseAnsiToSpannable(it.text) }
@@ -762,9 +797,14 @@ jobs:
               private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
               private fun isSystemMessage(text: String): Boolean = text.startsWith("【") && text.endsWith("】")
               
-              // 修复对话结束锁定逻辑：全量覆盖所有意图，保证一次后锁定
               private fun checkSystemMessageLock() {
-                  // 涵盖你代码里可能出现的所有系统断开连接语句的关键词
+                  // 【新增】最多 300 句对话限制
+                  if (currentSession.messages.size >= 300) {
+                      btnSend.isEnabled = false; inputMessage.isEnabled = false
+                      inputMessage.hint = "您已到达最大对话限制（300条）"
+                      return
+                  }
+
                   val endKeywords = listOf("结束", "终止", "离开", "踢出", "换个话题", "重新开始", "逃离", "逃跑", "中断", "下线", "再见")
                   val endSysIdx = currentSession.messages.indexOfLast { msg -> 
                       msg.isSystem && endKeywords.any { kw -> msg.text.contains(kw) } 
@@ -780,7 +820,7 @@ jobs:
                       }
                   } else {
                       inputMessage.isEnabled = true
-                      if (inputMessage.hint.toString().contains("结束") || inputMessage.hint.toString().contains("锁定") || inputMessage.hint.toString() == "正在加载...") {
+                      if (inputMessage.hint.toString().contains("结束") || inputMessage.hint.toString().contains("锁定") || inputMessage.hint.toString().contains("300条") || inputMessage.hint.toString() == "正在加载...") {
                           inputMessage.hint = "输入消息..."
                       }
                   }
@@ -883,40 +923,59 @@ jobs:
 
               private fun refreshHistory() { historyAdapter.updateList(histories.filter { it.messages.any { m -> m.isUser } }) }
               private fun saveSettings() { try { settingsFile.writeText(JSONObject().apply{ put("font_size", chatFontSize); put("tts_on", isTtsEnabled); put("tts_speed", ttsSpeed.toDouble()); put("tts_pitch", ttsPitch.toDouble()); put("tts_voice", selectedVoiceName ?: ""); put("typewriter_on", isTypewriterEnabled) }.toString()) } catch (_: Exception) {} }
-              private fun loadSettings() { try { if (settingsFile.exists()) { val json = JSONObject(settingsFile.readText()); chatFontSize = json.optInt("font_size", 14); isTtsEnabled = json.optBoolean("tts_on", false); ttsSpeed = json.optDouble("tts_speed", 1.0).toFloat(); ttsPitch = json.optDouble("tts_pitch", 1.0).toFloat(); selectedVoiceName = json.optString("tts_voice", "").takeIf { it.isNotEmpty() }; isTypewriterEnabled = json.optBoolean("typewriter_on", true) } } catch (_: Exception) {} }
+              private fun loadSettings() { try { if (settingsFile.exists()) { val json = JSONObject(settingsFile.readText()); chatFontSize = json.optInt("font_size", 14); isTtsEnabled = json.optBoolean("tts_on", false); ttsSpeed = json.optDouble("tts_speed", 1.0).toFloat(); ttsPitch = json.optDouble("tts_pitch", 1.0).toFloat(); selectedVoiceName = json.optString("tts_voice", "").takeIf { it.isNotEmpty() }; isTypewriterEnabled = json.optBoolean("typewriter_on", false) } } catch (_: Exception) {} }
               private fun cleanText(text: String): String = text.replace("\\r", "").trim()
-              private fun stripAnsi(text: String): String = text.replace(Regex("\u001B\\[[0-9;]*m"), "")
+              private fun stripAnsi(text: String): String = ANSI_REGEX.replace(text, "")
               private fun scrollToBottom() { chatRecycler.post { val pos = chatAdapter.itemCount - 1; if (pos >= 0) chatRecycler.smoothScrollToPosition(pos) } }
 
-              // ANSI 颜色和样式解析器
               private fun parseAnsiToSpannable(text: String): CharSequence {
                   val ssb = SpannableStringBuilder()
-                  val regex = Regex("\u001B\\[[0-9;]*m")
                   var lastIndex = 0
                   var isBold = false; var isUnderline = false; var currentColor: Int? = null
 
-                  for (match in regex.findAll(text)) {
+                  for (match in ANSI_REGEX.findAll(text)) {
                       val plainText = text.substring(lastIndex, match.range.first)
                       if (plainText.isNotEmpty()) {
                           val start = ssb.length; ssb.append(plainText); val end = ssb.length
-                          if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, end, 0)
-                          if (isUnderline) ssb.setSpan(UnderlineSpan(), start, end, 0)
-                          if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, end, 0)
+                          if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                          if (isUnderline) ssb.setSpan(UnderlineSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                          if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                       }
-                      when (val code = match.value) {
-                          "\u001B[0m" -> { isBold = false; isUnderline = false; currentColor = null }
-                          "\u001B[1m" -> isBold = true
-                          "\u001B[4m" -> isUnderline = true
-                          else -> if (code.contains("38;5;210")) currentColor = Color.parseColor("#FF6B6B") else if (code.contains("31m")) currentColor = Color.parseColor("#FF3B30")
+                      
+                      val code = match.value
+                      if (code.endsWith("m")) {
+                          val inner = code.substring(2, code.length - 1)
+                          if (inner.isEmpty()) { 
+                              isBold = false; isUnderline = false; currentColor = null 
+                          } else if (inner == "38;5;210") {
+                              currentColor = Color.parseColor("#FF6B6B")
+                          } else {
+                              val parts = inner.split(";")
+                              for (part in parts) {
+                                  when (part) {
+                                      "0" -> { isBold = false; isUnderline = false; currentColor = null }
+                                      "1" -> isBold = true
+                                      "4" -> isUnderline = true
+                                      "31", "91" -> currentColor = Color.parseColor("#FF3B30")
+                                      "32", "92" -> currentColor = Color.parseColor("#34C759")
+                                      "33", "93" -> currentColor = Color.parseColor("#FFCC00")
+                                      "34", "94" -> currentColor = Color.parseColor("#007AFF")
+                                      "35", "95" -> currentColor = Color.parseColor("#AF52DE")
+                                      "36", "96" -> currentColor = Color.parseColor("#32ADE6")
+                                      "30", "90", "37", "97" -> currentColor = Color.parseColor("#8E8E93")
+                                  }
+                              }
+                          }
                       }
                       lastIndex = match.range.last + 1
                   }
+                  
                   val rem = text.substring(lastIndex)
                   if (rem.isNotEmpty()) {
                       val start = ssb.length; ssb.append(rem)
-                      if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, ssb.length, 0)
-                      if (isUnderline) ssb.setSpan(UnderlineSpan(), start, ssb.length, 0)
-                      if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, ssb.length, 0)
+                      if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                      if (isUnderline) ssb.setSpan(UnderlineSpan(), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                      if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                   }
                   return ssb
               }
@@ -949,8 +1008,6 @@ jobs:
                           layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                           maxWidth = (parent.context.resources.displayMetrics.widthPixels * 0.75).toInt(); setPadding(42, 28, 42, 28); setLineSpacing(6f, 1f) 
                           setTextColor(ContextCompat.getColor(parent.context, when(viewType) { TYPE_USER, TYPE_ERROR -> R.color.user_text; TYPE_BOT -> R.color.bot_text; else -> R.color.gray_text }))
-                          
-                          // 【原生系统复制优化】：开启系统级别的自由选词复制
                           setTextIsSelectable(true)
                       }
                       bubble.addView(img); bubble.addView(tv); container.addView(bubble); return object : RecyclerView.ViewHolder(container) {}
@@ -1010,6 +1067,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: 李尔聊天机器人-终极修复版
+          name: 李尔聊天机器人-终极性能极客版
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
