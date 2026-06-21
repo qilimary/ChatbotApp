@@ -81,7 +81,7 @@ jobs:
                       with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
 
-      - name: Auto-patch source code (Fix NLP Crashing & Lost Newlines)
+      - name: Auto-patch source code (Fix Emoji Split, ANSI, Newlines)
         run: |
           python3 -c '
           import os, re
@@ -89,16 +89,22 @@ jobs:
               if not fname.endswith(".py"): continue
               with open(fname, "r", encoding="utf-8") as f: content = f.read()
               
-              # 1. 强行截胡 Web 模式下的色彩剔除机制，保留原始带 ANSI 色彩的文本
+              # 保留 ANSI 色彩文本，供 App 原生解析渲染
               new_content = re.sub(r"cleaned\s*=\s*normalize_output_for_environment\([^)]*\)", "cleaned = text", content)
               
-              # 2. 修复正则引擎提取句子时把换行符 \n 吃掉的问题（加上 (?s) 标记让 . 包含换行）
+              # 修复换行符丢失
               new_content = new_content.replace("r\x27.*?[。？！…]|.+$\x27", "r\x27(?s).*?[。？！…]|(?s).+$\x27")
               new_content = new_content.replace("r\".*?[。？！…]|.+$\"", "r\"(?s).*?[。？！…]|(?s).+$\"")
               
-              # 3. 修复 SemanticEmotionAnalyzer 导致 MCQ 选择题解析器崩溃的底层参数不匹配问题
+              # 修复 SemanticEmotionAnalyzer 报错导致选择题崩盘
               new_content = re.sub(r"get_sentence_vector\(([^,]+),\s*sim_calc\.char_idf\)", r"get_sentence_vector(\1)", new_content)
               
+              # 【关键修复1】：让短句合并逻辑支持可见长度，防止被不可见 ANSI 颜色码撑爆长度导致 Emoji 被孤立分割
+              new_content = re.sub(r"if len\(part\)\s*<\s*min_len:", "if visible_len(part) < min_len:", new_content)
+              
+              # 【关键修复2】：强制底层引擎识别为 Web 模式，彻底阻断终端 `time.sleep` 或多线程导致的异步队列消息阻塞“被吃掉”问题
+              new_content = re.sub(r"self\.is_web_mode\s*=\s*not\s*\(.*?\)", "self.is_web_mode = True", new_content)
+
               if new_content != content:
                   with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
           '
@@ -245,7 +251,7 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/drawer_layout" android:layout_width="match_parent" android:layout_height="match_parent">
               <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/bg_color">
-                  <!-- 顶部状态栏：将波纹按钮移动到右侧 -->
+                  <!-- 顶部状态栏 -->
                   <RelativeLayout android:layout_width="match_parent" android:layout_height="48dp" android:background="@color/white" android:elevation="2dp">
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
@@ -306,21 +312,25 @@ jobs:
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></vector>
           XML_EOF
           
-          # ================= 极具科技感的全新图标 =================
+          # ================= 极度清新的拟物风浅色头像图标 =================
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/ic_launcher_bg" /><foreground android:drawable="@drawable/ic_launcher_fg" /></adaptive-icon>
           XML_EOF
           cat > app/src/main/res/drawable/ic_launcher_bg.xml << 'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android">
-              <gradient android:angle="45" android:startColor="#0F172A" android:endColor="#1E293B" android:type="linear" />
+              <!-- 极光浅蓝过渡渐变色 -->
+              <gradient android:angle="45" android:startColor="#E0F2FE" android:endColor="#7DD3FC" android:type="linear" />
           </shape>
           XML_EOF
           cat > app/src/main/res/drawable/ic_launcher_fg.xml << 'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-              <path android:fillColor="#38BDF8" android:pathData="M54,24 C54,40.5 40.5,54 24,54 C40.5,54 54,67.5 54,84 C54,67.5 67.5,54 84,54 C67.5,54 54,40.5 54,24 Z" />
-              <path android:fillColor="#E0F2FE" android:pathData="M80,30 C80,36.6 74.6,42 68,42 C74.6,42 80,47.4 80,54 C80,47.4 85.4,42 92,42 C85.4,42 80,36.6 80,30 Z" />
-              <path android:fillColor="#E0F2FE" android:pathData="M30,76 C30,79.3 27.3,82 24,82 C27.3,82 30,84.7 30,88 C30,84.7 32.7,82 36,82 C32.7,82 30,79.3 30,76 Z" />
+              <!-- 可爱的圆角机器大脑结构 -->
+              <path android:fillColor="#0284C7" android:pathData="M34,44 C34,36 40,30 54,30 C68,30 74,36 74,44 L74,64 C74,72 68,78 54,78 C40,78 34,72 34,64 Z" />
+              <!-- 发光的眼睛点缀 -->
+              <path android:fillColor="#FFFFFF" android:pathData="M44,50 A4,4 0 1,1 44,58 A4,4 0 1,1 44,50 M64,50 A4,4 0 1,1 64,58 A4,4 0 1,1 64,50" />
+              <!-- 拟物化嘴角微笑 -->
+              <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:strokeLineCap="round" android:pathData="M50,66 L58,66" />
           </vector>
           XML_EOF
 
@@ -471,7 +481,10 @@ jobs:
                   btnNewSession.setOnClickListener { startNewSession() }
                   btnSend.setOnClickListener { sendMessage() }
                   btnClearAll.setOnClickListener { showClearAllDialog() }
-                  btnImage.setOnClickListener { pickImageLauncher.launch("image/*") }
+                  btnImage.setOnClickListener { 
+                      Toast.makeText(this, "仅支持识别文字", Toast.LENGTH_SHORT).show()
+                      pickImageLauncher.launch("image/*") 
+                  }
                   
                   inputMessage.addTextChangedListener(object : TextWatcher {
                       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -749,8 +762,13 @@ jobs:
               private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
               private fun isSystemMessage(text: String): Boolean = text.startsWith("【") && text.endsWith("】")
               
+              // 修复对话结束锁定逻辑：全量覆盖所有意图，保证一次后锁定
               private fun checkSystemMessageLock() {
-                  val endSysIdx = currentSession.messages.indexOfLast { it.isSystem && it.text.contains("会话已结束") }
+                  // 涵盖你代码里可能出现的所有系统断开连接语句的关键词
+                  val endKeywords = listOf("结束", "终止", "离开", "踢出", "换个话题", "重新开始", "逃离", "逃跑", "中断", "下线", "再见")
+                  val endSysIdx = currentSession.messages.indexOfLast { msg -> 
+                      msg.isSystem && endKeywords.any { kw -> msg.text.contains(kw) } 
+                  }
                   if (endSysIdx != -1) {
                       val userMsgsAfterEnd = currentSession.messages.subList(endSysIdx + 1, currentSession.messages.size).count { it.isUser }
                       if (userMsgsAfterEnd >= 1) {
@@ -931,6 +949,9 @@ jobs:
                           layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                           maxWidth = (parent.context.resources.displayMetrics.widthPixels * 0.75).toInt(); setPadding(42, 28, 42, 28); setLineSpacing(6f, 1f) 
                           setTextColor(ContextCompat.getColor(parent.context, when(viewType) { TYPE_USER, TYPE_ERROR -> R.color.user_text; TYPE_BOT -> R.color.bot_text; else -> R.color.gray_text }))
+                          
+                          // 【原生系统复制优化】：开启系统级别的自由选词复制
+                          setTextIsSelectable(true)
                       }
                       bubble.addView(img); bubble.addView(tv); container.addView(bubble); return object : RecyclerView.ViewHolder(container) {}
                   }
@@ -955,7 +976,6 @@ jobs:
                       
                       tv.text = msg.displaySpannable ?: if (getItemViewType(pos) == TYPE_BOT) parseAnsiToSpannable(msg.text) else stripAnsi(msg.text)
                       tv.textSize = if (getItemViewType(pos) == TYPE_SYSTEM) (fontSize - 2).toFloat() else fontSize.toFloat()
-                      bubble.setOnLongClickListener { copyToClipboard("已复制文字", stripAnsi(msg.text)); true }
                   }
                   override fun getItemCount() = messages.size
               }
