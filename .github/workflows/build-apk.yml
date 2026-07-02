@@ -39,7 +39,7 @@ jobs:
 
       - name: Download chatbot zip
         run: |
-          gdown 'https://drive.google.com/file/d/1NMGrsfWgfDJwyVLsg7AueUzSWvv-XG0z/view?usp=drivesdk' -O 机器人.zip
+          gdown 'https://drive.google.com/file/d/19mZnE88pYAPbGgJTHNKuoyLC_NI_WkzQ/view?usp=drivesdk' -O 机器人.zip
           unzip -o 机器人.zip -d 机器人解压/
 
       - name: Extract chatbot files
@@ -1067,6 +1067,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: 李尔聊天机器人-终极性能极客版
+          name: 李尔聊天系统
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
