@@ -1,10 +1,8 @@
 name: Build Lear Chatbot APK
-
 on:
   workflow_dispatch:
   push:
     branches: [ main, master ]
-
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -12,227 +10,328 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc
           sudo apt-get clean
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: Install gdown
-        run: pip install "gdown>=4.7.1"
-
-      - name: Download chatbot zip
+      - name: Install download tool
+        run: python -m pip install --disable-pip-version-check "gdown>=5.2,<6"
+      - name: Download and verify chatbot package
         run: |
-          gdown 'https://drive.google.com/file/d/19mZnE88pYAPbGgJTHNKuoyLC_NI_WkzQ/view?usp=drivesdk' -O 机器人.zip
-          unzip -o 机器人.zip -d 机器人解压/
-
+          set -euo pipefail
+          gdown --fuzzy 'https://drive.google.com/file/d/19mZnE88pYAPbGgJTHNKuoyLC_NI_WkzQ/view?usp=drivesdk' -O chatbot.zip
+          unzip -t chatbot.zip >/dev/null
+          rm -rf chatbot_extract
+          unzip -q -o chatbot.zip -d chatbot_extract
       - name: Extract chatbot files
         run: |
-          CHATBOT_DIR=$(find 机器人解压/ -name "李尔.py" -exec dirname {} \; | head -1)
-          cp -v "$CHATBOT_DIR"/*.py . 2>/dev/null || true
-          cp -v "$CHATBOT_DIR"/*.json . 2>/dev/null || true
-          cp -v "$CHATBOT_DIR"/*.pkl . 2>/dev/null || true
-
+          set -euo pipefail
+          CHATBOT_FILE="$(find chatbot_extract -type f -name '李尔.py' | head -n 1)"
+          if [ -z "$CHATBOT_FILE" ]; then
+            echo '未在压缩包中找到 李尔.py' >&2
+            exit 1
+          fi
+          CHATBOT_DIR="$(dirname "$CHATBOT_FILE")"
+          find "$CHATBOT_DIR" -maxdepth 1 -type f             \( -name '*.py' -o -name '*.json' -o -name '*.pkl' \)             -exec cp -f {} . \;
+          test -s '李尔.py'
       - name: Rename Chinese filenames to ASCII
         run: |
-          python3 -c '
-          import re, os
-          RENAME_MODULES = {"李尔": "lear_main", "单词": "chatbot_words", "数据": "chatbot_data", "成语": "chatbot_idioms"}
-          FILE_RENAME = {"字向量_f16_pure.json": "word_vectors.json", "李尔.py": "lear_main.py", "单词.py": "chatbot_words.py", "数据.py": "chatbot_data.py", "成语.py": "chatbot_idioms.py"}
-          contents = {}
-          for cn, en in RENAME_MODULES.items():
-              src = cn + ".py"
-              if os.path.exists(src):
-                  with open(src, "r", encoding="utf-8") as f: contents[en] = f.read()
-                  os.remove(src)
+          python3 - <<'PYEOF'
+          import os
+          import re
+          RENAME_MODULES = {
+              "李尔": "lear_main",
+              "单词": "chatbot_words",
+              "数据": "chatbot_data",
+              "成语": "chatbot_idioms",
+          }
+          FILE_RENAME = {
+              "字向量_f16_pure.json": "word_vectors.json",
+              "李尔.py": "lear_main.py",
+              "单词.py": "chatbot_words.py",
+              "数据.py": "chatbot_data.py",
+              "成语.py": "chatbot_idioms.py",
+          }
           def replace_all(content):
-              for cn_fn, en_fn in FILE_RENAME.items(): content = content.replace(cn_fn, en_fn)
-              for cn, en in RENAME_MODULES.items():
-                  content = re.sub(r"(?m)^(\s*)import " + cn + r"\s*$", r"\1import " + en + " as " + cn, content)
-                  content = re.sub(r"(?m)^(\s*)import " + cn + r" as ", r"\1import " + en + " as ", content)
-                  content = re.sub(r"(?m)^(\s*)from " + cn + r" import", r"\1from " + en + " import", content)
-                  content = re.sub(r"(\s)import " + cn + r"(\s|$)", r"\1import " + en + " as " + cn + r"\2", content)
+              for chinese_filename, ascii_filename in FILE_RENAME.items():
+                  content = content.replace(chinese_filename, ascii_filename)
+              for chinese_module, ascii_module in RENAME_MODULES.items():
+                  content = re.sub(
+                      rf"(?m)^(\s*)import {re.escape(chinese_module)}\s*$",
+                      rf"\1import {ascii_module} as {chinese_module}",
+                      content,
+                  )
+                  content = re.sub(
+                      rf"(?m)^(\s*)import {re.escape(chinese_module)} as ",
+                      rf"\1import {ascii_module} as ",
+                      content,
+                  )
+                  content = re.sub(
+                      rf"(?m)^(\s*)from {re.escape(chinese_module)} import",
+                      rf"\1from {ascii_module} import",
+                      content,
+                  )
+                  content = re.sub(
+                      rf"(\s)import {re.escape(chinese_module)}(\s|$)",
+                      rf"\1import {ascii_module} as {chinese_module}\2",
+                      content,
+                  )
               return content
-          for en, content in contents.items():
-              with open(en + ".py", "w", encoding="utf-8") as f: f.write(replace_all(content))
-          for cn_fn, en_fn in FILE_RENAME.items():
-              if cn_fn.endswith(".json") and os.path.exists(cn_fn): os.rename(cn_fn, en_fn)
-          for fname in os.listdir("."):
-              if fname.endswith(".py") and not any(fname == en + ".py" for en in RENAME_MODULES.values()):
-                  with open(fname, "r", encoding="utf-8") as f: content = f.read()
-                  new_content = replace_all(content)
-                  if new_content != content:
-                      with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
-          '
-
-      - name: Auto-patch source code (Fix Emoji Split, ANSI, Newlines)
+          cached_modules = {}
+          for chinese_module, ascii_module in RENAME_MODULES.items():
+              source = chinese_module + ".py"
+              if os.path.exists(source):
+                  with open(source, "r", encoding="utf-8") as file:
+                      cached_modules[ascii_module] = file.read()
+                  os.remove(source)
+          for ascii_module, content in cached_modules.items():
+              with open(ascii_module + ".py", "w", encoding="utf-8", newline="\n") as file:
+                  file.write(replace_all(content))
+          for chinese_filename, ascii_filename in FILE_RENAME.items():
+              if chinese_filename.endswith((".json", ".pkl")) and os.path.exists(chinese_filename):
+                  os.replace(chinese_filename, ascii_filename)
+          generated_modules = {name + ".py" for name in RENAME_MODULES.values()}
+          for filename in os.listdir("."):
+              if not filename.endswith(".py") or filename in generated_modules:
+                  continue
+              with open(filename, "r", encoding="utf-8") as file:
+                  original = file.read()
+              updated = replace_all(original)
+              if updated != original:
+                  with open(filename, "w", encoding="utf-8", newline="\n") as file:
+                      file.write(updated)
+          if not os.path.exists("lear_main.py"):
+              raise SystemExit("重命名失败：lear_main.py 不存在")
+          PYEOF
+      - name: Auto-patch source code
         run: |
-          python3 -c '
-          import os, re
-          for fname in os.listdir("."):
-              if not fname.endswith(".py"): continue
-              with open(fname, "r", encoding="utf-8") as f: content = f.read()
-              
-              # 保留 ANSI 色彩文本，供 App 原生解析渲染
-              new_content = re.sub(r"cleaned\s*=\s*normalize_output_for_environment\([^)]*\)", "cleaned = text", content)
-              
-              # 修复换行符丢失
-              new_content = new_content.replace("r\x27.*?[。？！…]|.+$\x27", "r\x27(?s).*?[。？！…]|(?s).+$\x27")
-              new_content = new_content.replace("r\".*?[。？！…]|.+$\"", "r\"(?s).*?[。？！…]|(?s).+$\"")
-              
-              # 修复 SemanticEmotionAnalyzer 报错导致选择题崩盘
-              new_content = re.sub(r"get_sentence_vector\(([^,]+),\s*sim_calc\.char_idf\)", r"get_sentence_vector(\1)", new_content)
-              
-              # 让短句合并逻辑支持可见长度，防止被不可见 ANSI 颜色码撑爆长度导致 Emoji 被孤立分割
-              new_content = re.sub(r"if len\(part\)\s*<\s*min_len:", "if visible_len(part) < min_len:", new_content)
-              
-              # 强制底层引擎识别为 Web 模式，彻底阻断终端 `time.sleep` 导致的异步队列消息阻塞“被吃掉”问题
-              new_content = re.sub(r"self\.is_web_mode\s*=\s*not\s*\(.*?\)", "self.is_web_mode = True", new_content)
-
-              if new_content != content:
-                  with open(fname, "w", encoding="utf-8") as f: f.write(new_content)
-          '
-
-      - name: Generate Android Project Structure
+          python3 - <<'PYEOF'
+          import os
+          import re
+          for filename in os.listdir("."):
+              if not filename.endswith(".py"):
+                  continue
+              with open(filename, "r", encoding="utf-8") as file:
+                  content = file.read()
+              updated = re.sub(
+                  r"cleaned\s*=\s*normalize_output_for_environment\([^\n]*\)",
+                  "cleaned = text",
+                  content,
+              )
+              updated = updated.replace(
+                  "r'.*?[。？！…]|.+$'",
+                  "r'(?s:.*?[。？！…]|.+$)'",
+              )
+              updated = updated.replace(
+                  'r".*?[。？！…]|.+$"',
+                  'r"(?s:.*?[。？！…]|.+$)"',
+              )
+              updated = re.sub(
+                  r"get_sentence_vector\(([^,\n]+),\s*sim_calc\.char_idf\)",
+                  r"get_sentence_vector(\1)",
+                  updated,
+              )
+              if "def visible_len" in updated:
+                  updated = re.sub(
+                      r"if len\(part\)\s*<\s*min_len:",
+                      "if visible_len(part) < min_len:",
+                      updated,
+                  )
+              updated = re.sub(
+                  r"self\.is_web_mode\s*=\s*not\s*\([^\n]*\)",
+                  "self.is_web_mode = True",
+                  updated,
+              )
+              if updated != content:
+                  with open(filename, "w", encoding="utf-8", newline="\n") as file:
+                      file.write(updated)
+          PYEOF
+      - name: Generate Android project
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p app/src/main/java/com/lear/chatbot
-          mkdir -p app/src/main/res/layout
-          mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/res/drawable
-          mkdir -p app/src/main/res/mipmap-anydpi-v26
-          
-          mkdir -p app/src/main/assets/chatbot
-          mkdir -p app/src/main/python
-
-          for f in *.py *.json *.pkl; do
-            [ -f "$f" ] && cp -n "$f" app/src/main/assets/chatbot/ 2>/dev/null || true
-          done
-
-          cat > app/src/main/python/bootstrap.py << 'PYEOF'
+          mkdir -p app/src/main/res/{layout,values,drawable,mipmap-anydpi-v26}
+          mkdir -p app/src/main/assets/chatbot app/src/main/python
+          find . -maxdepth 1 -type f             \( -name '*.py' -o -name '*.json' -o -name '*.pkl' \)             -exec cp -f {} app/src/main/assets/chatbot/ \;
+          cat > app/src/main/python/bootstrap.py <<'PYEOF'
           # -*- coding: utf-8 -*-
-          import os, sys, json, traceback, gc
+          import gc
+          import json
+          import os
+          import sys
+          import threading
+          import traceback
           _lear_main = None
-
+          _bridge_lock = threading.RLock()
+          _call_count = 0
+          def _json(value):
+              return json.dumps(value, ensure_ascii=False, default=str)
+          def _maybe_collect(force=False):
+              global _call_count
+              _call_count += 1
+              if force or _call_count % 12 == 0:
+                  gc.collect()
+          def _clear_runtime_state():
+              manager = getattr(_lear_main, "WEB_SESSION_MANAGER", None)
+              sessions = getattr(manager, "sessions", None)
+              if sessions is not None and hasattr(sessions, "clear"):
+                  sessions.clear()
+              queue = getattr(_lear_main, "global_async_queue", None)
+              if queue is None:
+                  _lear_main.global_async_queue = []
+              elif hasattr(queue, "clear"):
+                  queue.clear()
+              else:
+                  _lear_main.global_async_queue = []
+          def _start_new_session_locked():
+              _clear_runtime_state()
+              result = _lear_main.web_start_session()
+              _maybe_collect(force=True)
+              return result
           def init_backend(files_dir):
               global _lear_main
               try:
-                  os.chdir(files_dir)
-                  if files_dir not in sys.path: sys.path.insert(0, files_dir)
-                  import lear_main
-                  _lear_main = lear_main
-                  
-                  if hasattr(_lear_main, 'WEB_SESSION_MANAGER'):
-                      _lear_main.WEB_SESSION_MANAGER.sessions.clear()
-                  if hasattr(_lear_main, 'global_async_queue'):
-                      _lear_main.global_async_queue.clear()
-                  else:
-                      _lear_main.global_async_queue = []
-                  gc.collect()
-
-                  result = _lear_main.web_start_session()
-                  gc.collect()
-                  return json.dumps(result)
-              except Exception as e:
-                  return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
-
-          def process_message(text, session_id):
-              global _lear_main
+                  with _bridge_lock:
+                      os.chdir(files_dir)
+                      if files_dir not in sys.path:
+                          sys.path.insert(0, files_dir)
+                      if _lear_main is None:
+                          import lear_main
+                          _lear_main = lear_main
+                      return _json(_start_new_session_locked())
+              except Exception as error:
+                  return _json({"error": str(error), "traceback": traceback.format_exc()})
+          def start_new_session():
               if _lear_main is None:
-                  return json.dumps({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
+                  return _json({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
               try:
-                  result = _lear_main.web_process_message(text, session_id)
-                  gc.collect()
-                  return json.dumps(result)
-              except Exception as e:
-                  return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
-
+                  with _bridge_lock:
+                      return _json(_start_new_session_locked())
+              except Exception as error:
+                  return _json({"error": str(error), "traceback": traceback.format_exc()})
+          def process_message(text, session_id):
+              if _lear_main is None:
+                  return _json({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
+              try:
+                  with _bridge_lock:
+                      result = _lear_main.web_process_message(text, session_id)
+                      _maybe_collect()
+                      return _json(result)
+              except Exception as error:
+                  return _json({"error": str(error), "traceback": traceback.format_exc()})
           def poll_async():
-              global _lear_main
-              if _lear_main is None or not hasattr(_lear_main, 'global_async_queue'):
+              if _lear_main is None:
                   return "[]"
               try:
-                  msgs = list(_lear_main.global_async_queue)
-                  _lear_main.global_async_queue.clear()
-                  return json.dumps(msgs)
+                  with _bridge_lock:
+                      queue = getattr(_lear_main, "global_async_queue", None)
+                      if queue is None:
+                          return "[]"
+                      messages = list(queue)
+                      if hasattr(queue, "clear"):
+                          queue.clear()
+                      else:
+                          _lear_main.global_async_queue = []
+                      return _json(messages)
               except Exception:
                   return "[]"
           PYEOF
-
-          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
-
-          cat > settings.gradle << 'GRADLE_EOF'
+          cat > settings.gradle <<'GRADLE_EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
           rootProject.name = "LearChatbot"
           include ':app'
           GRADLE_EOF
-
-          cat > build.gradle << 'GRADLE_EOF'
-          plugins { id 'com.android.application' version '8.1.4' apply false; id 'org.jetbrains.kotlin.android' version '1.9.20' apply false; id 'com.chaquo.python' version '15.0.1' apply false }
+          cat > build.gradle <<'GRADLE_EOF'
+          plugins {
+              id 'com.android.application' version '8.1.4' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+              id 'com.chaquo.python' version '15.0.1' apply false
+          }
           GRADLE_EOF
-
-          cat > gradle.properties << 'GRADLE_EOF'
-          org.gradle.jvmargs=-Xmx4096m
+          cat > gradle.properties <<'GRADLE_EOF'
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
           org.gradle.caching=true
           org.gradle.parallel=true
           android.useAndroidX=true
           android.nonTransitiveRClass=true
           kotlin.code.style=official
+          kotlin.incremental=true
           GRADLE_EOF
-
-          cat > app/build.gradle << 'GRADLE_EOF'
-          plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'com.chaquo.python' }
+          cat > local.properties <<'PROPERTIES_EOF'
+          sdk.dir=/usr/local/lib/android/sdk
+          PROPERTIES_EOF
+          cat > app/build.gradle <<'GRADLE_EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+              id 'com.chaquo.python'
+          }
           android {
-              namespace 'com.lear.chatbot'; compileSdk 34
+              namespace 'com.lear.chatbot'
+              compileSdk 34
               defaultConfig {
-                  applicationId "com.lear.chatbot"; minSdk 26; targetSdk 34; versionCode 1; versionName "2.0.1"
-                  ndk { abiFilters "arm64-v8a" }; python { version "3.10" }
+                  applicationId "com.lear.chatbot"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 2
+                  versionName "2.0.2"
+                  ndk { abiFilters "arm64-v8a" }
+                  python { version "3.10" }
               }
-              buildTypes { release { minifyEnabled false } }
-              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
               kotlinOptions { jvmTarget = '17' }
           }
           dependencies {
-              implementation 'androidx.core:core-ktx:1.12.0'; implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'; implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-              implementation 'androidx.recyclerview:recyclerview:1.3.2'; implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
+              implementation 'androidx.recyclerview:recyclerview:1.3.2'
+              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              implementation 'com.google.android.material:material:1.11.0'
               implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
               implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
           }
           GRADLE_EOF
-
-          cat > app/src/main/AndroidManifest.xml << 'XML_EOF'
+          cat > app/src/main/AndroidManifest.xml <<'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <application android:largeHeap="true" android:allowBackup="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.LearChatbot">
-                  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
+                  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
               </application>
           </manifest>
           XML_EOF
-
-          cat > app/src/main/res/values/strings.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">李尔</string></resources>
+          cat > app/src/main/res/values/strings.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><string name="app_name">李尔</string></resources>
           XML_EOF
-
-          cat > app/src/main/res/values/colors.xml << 'XML_EOF'
+          cat > app/src/main/res/values/colors.xml <<'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <color name="bg_color">#F2F2F7</color><color name="white">#FFFFFF</color><color name="black">#0A0A0A</color>
@@ -241,17 +340,20 @@ jobs:
               <color name="gray_text">#8E8E93</color><color name="border_gray">#E0E0E0</color><color name="input_bg">#F2F2F7</color>
           </resources>
           XML_EOF
-
-          cat > app/src/main/res/values/themes.xml << 'XML_EOF'
+          cat > app/src/main/res/values/themes.xml <<'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources><style name="Theme.LearChatbot" parent="Theme.MaterialComponents.Light.NoActionBar"><item name="colorPrimary">@color/accent_blue</item><item name="colorPrimaryVariant">@color/accent_blue</item><item name="colorOnPrimary">@color/white</item><item name="android:statusBarColor">@color/white</item><item name="android:windowLightStatusBar">true</item><item name="android:windowBackground">@color/bg_color</item></style></resources>
+          <resources>
+              <style name="Theme.LearChatbot" parent="Theme.MaterialComponents.Light.NoActionBar">
+                  <item name="colorPrimary">@color/accent_blue</item><item name="colorPrimaryVariant">@color/accent_blue</item>
+                  <item name="colorOnPrimary">@color/white</item><item name="android:statusBarColor">@color/white</item>
+                  <item name="android:windowLightStatusBar">true</item><item name="android:windowBackground">@color/bg_color</item>
+              </style>
+          </resources>
           XML_EOF
-
-          cat > app/src/main/res/layout/activity_main.xml << 'XML_EOF'
+          cat > app/src/main/res/layout/activity_main.xml <<'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/drawer_layout" android:layout_width="match_parent" android:layout_height="match_parent">
               <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/bg_color">
-                  <!-- 顶部状态栏 -->
                   <RelativeLayout android:layout_width="match_parent" android:layout_height="48dp" android:background="@color/white" android:elevation="2dp">
                       <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:orientation="horizontal" android:layout_alignParentStart="true">
                           <ImageButton android:id="@+id/btn_menu" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_menu" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="菜单" app:tint="@color/black" />
@@ -264,10 +366,8 @@ jobs:
                           <ImageButton android:id="@+id/btn_new_session" android:layout_width="44dp" android:layout_height="match_parent" android:src="@drawable/ic_add" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="新对话" app:tint="@color/black" />
                       </LinearLayout>
                   </RelativeLayout>
-                  <!-- 聊天列表 -->
                   <androidx.recyclerview.widget.RecyclerView android:id="@+id/chat_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingStart="8dp" android:paddingEnd="2dp" android:paddingTop="12dp" android:paddingBottom="12dp" app:fastScrollEnabled="true" app:fastScrollVerticalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollVerticalTrackDrawable="@drawable/fastscroll_track" app:fastScrollHorizontalThumbDrawable="@drawable/fastscroll_thumb" app:fastScrollHorizontalTrackDrawable="@drawable/fastscroll_track" />
                   <ProgressBar android:id="@+id/loading_bar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" android:indeterminateTint="@color/accent_blue" />
-                  <!-- 底部输入区 -->
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="8dp" android:background="@color/white" android:elevation="4dp" android:gravity="center_vertical">
                       <ImageButton android:id="@+id/btn_image" android:layout_width="40dp" android:layout_height="40dp" android:src="@drawable/ic_image" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="上传图片" app:tint="@color/black" />
                       <EditText android:id="@+id/input_message" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="4dp" android:hint="正在加载..." android:textColorHint="@color/gray_text" android:background="@drawable/bg_input" android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="10dp" android:paddingBottom="10dp" android:textSize="15sp" android:textColor="@color/black" android:maxLines="4" android:inputType="textMultiLine|textCapSentences" android:imeOptions="actionSend" />
@@ -282,91 +382,63 @@ jobs:
               </LinearLayout>
           </androidx.drawerlayout.widget.DrawerLayout>
           XML_EOF
-
-          # ================= 优化版 FastScroll 拇指滑块（视觉极小，触摸面积超大） =================
-          cat > app/src/main/res/drawable/fastscroll_thumb.xml << 'XML_EOF'
+          cat > app/src/main/res/drawable/fastscroll_thumb.xml <<'XML_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <selector xmlns:android="http://schemas.android.com/apk/res/android">
-              <item android:state_pressed="true">
-                  <layer-list>
-                      <!-- 隐形的巨型防误触点击区 -->
-                      <item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item>
-                      <!-- 视觉上的小滑块，靠右对齐 -->
-                      <item android:gravity="end|center_vertical" android:left="32dp">
-                          <shape><solid android:color="#007AFF"/><corners android:radius="4dp"/><size android:width="8dp" android:height="60dp"/></shape>
-                      </item>
-                  </layer-list>
-              </item>
-              <item>
-                  <layer-list>
-                      <item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item>
-                      <item android:gravity="end|center_vertical" android:left="34dp">
-                          <shape><solid android:color="#A0A0A0"/><corners android:radius="3dp"/><size android:width="6dp" android:height="60dp"/></shape>
-                      </item>
-                  </layer-list>
-              </item>
+              <item android:state_pressed="true"><layer-list><item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item><item android:gravity="end|center_vertical" android:left="32dp"><shape><solid android:color="#007AFF"/><corners android:radius="4dp"/><size android:width="8dp" android:height="60dp"/></shape></item></layer-list></item>
+              <item><layer-list><item><shape><solid android:color="#00000000"/><size android:width="40dp" android:height="60dp"/></shape></item><item android:gravity="end|center_vertical" android:left="34dp"><shape><solid android:color="#A0A0A0"/><corners android:radius="3dp"/><size android:width="6dp" android:height="60dp"/></shape></item></layer-list></item>
           </selector>
           XML_EOF
-          
-          # ================= 优化版 FastScroll 轨道 =================
-          cat > app/src/main/res/drawable/fastscroll_track.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-              <!-- 配合滑块的隐形宽幅轨道 -->
-              <solid android:color="#00000000"/>
-              <size android:width="40dp"/>
-          </shape>
+          cat > app/src/main/res/drawable/fastscroll_track.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#00000000"/><size android:width="40dp"/></shape>
           XML_EOF
-
-          cat > app/src/main/res/drawable/ic_wave.xml << 'XML_EOF'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M11,3h2v18h-2V3z M7,8h2v8H7V8z M15,8h2v8h-2V8z M3,11h2v2H3v-2z M19,11h2v2h-2v-2z" /></vector>
+          cat > app/src/main/res/drawable/ic_wave.xml <<'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M11,3h2v18h-2V3z M7,8h2v8H7V8z M15,8h2v8h-2V8z M3,11h2v2H3v-2z M19,11h2v2H19v-2z" /></vector>
           XML_EOF
-          cat > app/src/main/res/drawable/ic_image.xml << 'XML_EOF'
+          cat > app/src/main/res/drawable/ic_image.xml <<'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M21,19V5c0,-1.1 -0.9,-2 -2,-2H5C3.9,3 3,3.9 3,5v14c0,1.1 0.9,2 2,2h14C20.1,21 21,20.1 21,19zM8.5,13.5l2.5,3.01L14.5,12l4.5,6H5L8.5,13.5z" /></vector>
           XML_EOF
-          cat > app/src/main/res/drawable/bg_input.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/input_bg" /><corners android:radius="14dp" /></shape>
+          cat > app/src/main/res/drawable/bg_input.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/input_bg"/><corners android:radius="14dp"/></shape>
           XML_EOF
-          cat > app/src/main/res/drawable/bg_bubble_user.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/user_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="4dp" android:bottomRightRadius="18dp" /></shape>
+          cat > app/src/main/res/drawable/bg_bubble_user.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/user_bubble"/><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="4dp" android:bottomRightRadius="18dp"/></shape>
           XML_EOF
-          cat > app/src/main/res/drawable/bg_bubble_bot.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/bot_bubble" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
+          cat > app/src/main/res/drawable/bg_bubble_bot.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/bot_bubble"/><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp"/></shape>
           XML_EOF
-          cat > app/src/main/res/drawable/bg_bubble_error.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/error_red" /><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp" /></shape>
+          cat > app/src/main/res/drawable/bg_bubble_error.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="@color/error_red"/><corners android:topLeftRadius="18dp" android:topRightRadius="18dp" android:bottomLeftRadius="18dp" android:bottomRightRadius="4dp"/></shape>
           XML_EOF
-          cat > app/src/main/res/drawable/ic_menu.xml << 'XML_EOF'
+          cat > app/src/main/res/drawable/ic_menu.xml <<'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M3,18h18v-2H3v2zM3,13h18v-2H3v2zM3,6v2h18V6H3z" /></vector>
           XML_EOF
-          cat > app/src/main/res/drawable/ic_add.xml << 'XML_EOF'
+          cat > app/src/main/res/drawable/ic_add.xml <<'XML_EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FF000000" android:pathData="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></vector>
           XML_EOF
-          
-          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/ic_launcher_bg" /><foreground android:drawable="@drawable/ic_launcher_fg" /></adaptive-icon>
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/ic_launcher_bg"/><foreground android:drawable="@drawable/ic_launcher_fg"/></adaptive-icon>
           XML_EOF
-          cat > app/src/main/res/drawable/ic_launcher_bg.xml << 'XML_EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android">
-              <gradient android:angle="45" android:startColor="#E0F2FE" android:endColor="#7DD3FC" android:type="linear" />
-          </shape>
+          cat > app/src/main/res/drawable/ic_launcher_bg.xml <<'XML_EOF'
+          <?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><gradient android:angle="45" android:startColor="#E0F2FE" android:endColor="#7DD3FC" android:type="linear"/></shape>
           XML_EOF
-          cat > app/src/main/res/drawable/ic_launcher_fg.xml << 'XML_EOF'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-              <path android:strokeColor="#FFFFFF" android:strokeWidth="12" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M 42,32 V 76 H 66" />
-          </vector>
+          cat > app/src/main/res/drawable/ic_launcher_fg.xml <<'XML_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="12" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M42,32 V76 H66"/></vector>
           XML_EOF
-
-          cat > app/src/main/java/com/lear/chatbot/MainActivity.kt << 'KT_EOF'
+          cat > app/src/main/java/com/lear/chatbot/MainActivity.kt <<'KT_EOF'
           package com.lear.chatbot
-
           import android.content.ClipData
           import android.content.ClipboardManager
           import android.content.Context
+          import android.content.Intent
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.Typeface
+          import android.net.Uri
+          import android.os.Build
           import android.os.Bundle
+          import android.os.SystemClock
           import android.speech.tts.TextToSpeech
           import android.text.Editable
           import android.text.Spannable
@@ -375,6 +447,8 @@ jobs:
           import android.text.style.ForegroundColorSpan
           import android.text.style.StyleSpan
           import android.text.style.UnderlineSpan
+          import android.util.LruCache
+          import android.util.Size
           import android.view.Gravity
           import android.view.View
           import android.view.ViewGroup
@@ -393,34 +467,98 @@ jobs:
           import androidx.appcompat.app.AlertDialog
           import androidx.appcompat.app.AppCompatActivity
           import androidx.core.content.ContextCompat
+          import androidx.drawerlayout.widget.DrawerLayout
           import androidx.lifecycle.lifecycleScope
           import androidx.recyclerview.widget.LinearLayoutManager
           import androidx.recyclerview.widget.RecyclerView
-          import androidx.drawerlayout.widget.DrawerLayout
+          import androidx.recyclerview.widget.SimpleItemAnimator
+          import com.chaquo.python.PyObject
           import com.chaquo.python.Python
           import com.chaquo.python.android.AndroidPlatform
           import com.google.android.material.button.MaterialButton
           import com.google.mlkit.vision.common.InputImage
           import com.google.mlkit.vision.text.TextRecognition
+          import com.google.mlkit.vision.text.TextRecognizer
           import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+          import kotlinx.coroutines.CancellationException
           import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.ExecutorCoroutineDispatcher
+          import kotlinx.coroutines.Job
+          import kotlinx.coroutines.asCoroutineDispatcher
           import kotlinx.coroutines.delay
+          import kotlinx.coroutines.isActive
           import kotlinx.coroutines.launch
+          import kotlinx.coroutines.sync.Mutex
+          import kotlinx.coroutines.sync.withLock
           import kotlinx.coroutines.withContext
           import org.json.JSONArray
           import org.json.JSONObject
           import java.io.File
           import java.util.Locale
-
-          data class ChatMessage(var text: String, var isUser: Boolean, var isError: Boolean = false, var isSystem: Boolean = false, var imageUri: String? = null) {
-              @Transient var displaySpannable: CharSequence? = null
+          import java.util.concurrent.Executors
+          import java.util.concurrent.atomic.AtomicLong
+          import kotlin.math.max
+          private val 消息编号生成器 = AtomicLong(1L)
+          private val 会话编号生成器 = AtomicLong(1L)
+          private class ChatMessage(
+              val text: String,
+              val isUser: Boolean,
+              val isError: Boolean = false,
+              val isSystem: Boolean = false,
+              val imageUri: String? = null,
+              val localId: Long = 消息编号生成器.getAndIncrement()
+          ) {
+              @Transient
+              var displaySpannable: CharSequence? = null
           }
-          data class ChatSession(var id: String? = null, var preview: String = "新对话", var messages: MutableList<ChatMessage> = mutableListOf())
-
+          private class ChatSession(
+              var id: String? = null,
+              var preview: String = "新对话",
+              val messages: MutableList<ChatMessage> = mutableListOf(),
+              val localId: Long = 会话编号生成器.getAndIncrement()
+          )
+          private data class MessageSnapshot(
+              val text: String,
+              val isUser: Boolean,
+              val isError: Boolean,
+              val isSystem: Boolean,
+              val imageUri: String?
+          )
+          private data class SessionSnapshot(
+              val preview: String,
+              val messages: List<MessageSnapshot>
+          )
+          private data class SessionStartResult(
+              val sessionId: String?,
+              val messages: List<String>,
+              val error: String? = null,
+              val traceback: String? = null
+          )
+          private data class MessageResult(
+              val sessionId: String?,
+              val replies: List<String>,
+              val error: String? = null,
+              val traceback: String? = null
+          )
           class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
-              companion object { 
-                  private const val TYPE_USER = 0; private const val TYPE_BOT = 1; private const val TYPE_ERROR = 2; private const val TYPE_SYSTEM = 3 
+              companion object {
+                  private const val TYPE_USER = 0
+                  private const val TYPE_BOT = 1
+                  private const val TYPE_ERROR = 2
+                  private const val TYPE_SYSTEM = 3
+                  private const val MAX_HISTORY = 15
+                  private const val MAX_MESSAGES = 300
+                  private const val ASSET_VERSION = "2026-07-10-optimized-1"
+                  private const val PAYLOAD_TYPING = "typing"
                   private val ANSI_REGEX = Regex("\u001B\\[[0-9;]*[a-zA-Z]")
+                  private val COLOR_RED = Color.rgb(255, 59, 48)
+                  private val COLOR_GREEN = Color.rgb(52, 199, 89)
+                  private val COLOR_YELLOW = Color.rgb(255, 204, 0)
+                  private val COLOR_BLUE = Color.rgb(0, 122, 255)
+                  private val COLOR_PURPLE = Color.rgb(175, 82, 222)
+                  private val COLOR_CYAN = Color.rgb(50, 173, 230)
+                  private val COLOR_GRAY = Color.rgb(142, 142, 147)
+                  private val COLOR_SOFT_RED = Color.rgb(255, 107, 107)
               }
               private lateinit var drawerLayout: DrawerLayout
               private lateinit var chatRecycler: RecyclerView
@@ -435,72 +573,162 @@ jobs:
               private lateinit var btnMenu: ImageButton
               private lateinit var btnImage: ImageButton
               private lateinit var loadingBar: ProgressBar
-
               private val chatAdapter = ChatAdapter()
               private val historyAdapter = HistoryAdapter()
               private val histories = mutableListOf<ChatSession>()
               private var currentSession = ChatSession()
               private var isProcessing = false
-              
+              private var isSessionStarting = false
+              private var busyOperations = 0
+              private var sessionGeneration = 0L
               private var chatFontSize = 14
               private var isTypewriterEnabled = false
-              
-              private var pollingJob: kotlinx.coroutines.Job? = null
-
+              private var pollingJob: Job? = null
+              private var sessionStartJob: Job? = null
+              private var messageJob: Job? = null
+              private var historySaveJob: Job? = null
+              private val typingJobs = mutableMapOf<Long, Job>()
+              private val historyWriteMutex = Mutex()
+              private val pythonDispatcher: ExecutorCoroutineDispatcher =
+                  Executors.newSingleThreadExecutor { runnable ->
+                      Thread(runnable, "lear-python-bridge").apply { priority = Thread.NORM_PRIORITY - 1 }
+                  }.asCoroutineDispatcher()
               private lateinit var tts: TextToSpeech
               private var isTtsEnabled = false
               private var ttsSpeed = 1.0f
               private var ttsPitch = 1.0f
-              private var availableVoices = listOf<android.speech.tts.Voice>()
+              private var availableVoices = emptyList<android.speech.tts.Voice>()
               private var selectedVoiceName: String? = null
-
-              private var bootstrapModule: com.chaquo.python.PyObject? = null
+              private var textRecognizer: TextRecognizer? = null
+              private var isOcrProcessing = false
+              private var bootstrapModule: PyObject? = null
               private val historyFile by lazy { File(filesDir, "chat_history.json") }
               private val settingsFile by lazy { File(filesDir, "settings.json") }
               private val crashFile by lazy { File(filesDir, "crash.txt") }
-
-              private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-                  if (uri != null) processImage(uri)
+              private val imageCache: LruCache<String, Bitmap> by lazy {
+                  val maxMemoryKb = (Runtime.getRuntime().maxMemory() / 1024L).toInt()
+                  object : LruCache<String, Bitmap>(max(4 * 1024, maxMemoryKb / 16)) {
+                      override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+                  }
               }
-
+              private var pendingSmoothScroll = true
+              private val scrollRunnable = Runnable {
+                  val position = chatAdapter.itemCount - 1
+                  if (position < 0) return@Runnable
+                  val manager = chatRecycler.layoutManager as? LinearLayoutManager ?: return@Runnable
+                  val lastVisible = manager.findLastVisibleItemPosition()
+                  val distance = position - lastVisible
+                  if (pendingSmoothScroll && distance in 0..6) {
+                      chatRecycler.smoothScrollToPosition(position)
+                  } else {
+                      chatRecycler.scrollToPosition(position)
+                  }
+              }
+              private val pickImageLauncher =
+                  registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                      if (uri != null) {
+                          try {
+                              contentResolver.takePersistableUriPermission(
+                                  uri,
+                                  Intent.FLAG_GRANT_READ_URI_PERMISSION
+                              )
+                          } catch (_: SecurityException) {
+                              // 某些文件提供器不支持永久授权，仍可在本次运行中使用。
+                          }
+                          processImage(uri)
+                      }
+                  }
               override fun onCreate(savedInstanceState: Bundle?) {
-                  Thread.setDefaultUncaughtExceptionHandler { _, throwable -> try { crashFile.writeText(throwable.stackTraceToString()) } catch (e: Exception) {}; android.os.Process.killProcess(android.os.Process.myPid()) }
+                  installCrashHandler()
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
-
-                  if (crashFile.exists()) {
-                      val log = crashFile.readText(); crashFile.delete()
-                      AlertDialog.Builder(this).setTitle("上次运行时发生崩溃").setMessage(log).setPositiveButton("关闭", null).setNeutralButton("一键复制错误") { _, _ -> copyToClipboard("崩溃日志", log) }.show()
-                  }
-                  
+                  bindViews()
+                  loadSettings()
                   tts = TextToSpeech(this, this)
-                  bindViews(); setupListeners(); setupRecyclerViews(); loadSettings(); loadAllHistory(); refreshHistory(); initPython()
+                  setupListeners()
+                  setupRecyclerViews()
+                  loadAllHistory()
+                  refreshHistory()
+                  showPreviousCrashIfNeeded()
+                  initPython()
               }
-
-              override fun onInit(status: Int) {
-                  if (status == TextToSpeech.SUCCESS) {
-                      val result = tts.setLanguage(Locale.CHINESE)
-                      if (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED) {
-                          availableVoices = tts.voices?.filter { it.locale.language == Locale.CHINESE.language || it.locale.language == "zh" }?.distinctBy { it.name }?.sortedBy { it.name } ?: emptyList()
-                          selectedVoiceName?.let { name -> availableVoices.find { it.name == name }?.let { tts.voice = it } }
+              private fun installCrashHandler() {
+                  val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+                  Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                      try {
+                          crashFile.writeText(throwable.stackTraceToString())
+                      } catch (_: Exception) {
+                      }
+                      if (previousHandler != null) {
+                          previousHandler.uncaughtException(thread, throwable)
+                      } else {
+                          android.os.Process.killProcess(android.os.Process.myPid())
                       }
                   }
               }
-
+              private fun showPreviousCrashIfNeeded() {
+                  if (!crashFile.exists()) return
+                  val log = runCatching { crashFile.readText() }.getOrDefault("无法读取崩溃日志")
+                  crashFile.delete()
+                  AlertDialog.Builder(this)
+                      .setTitle("上次运行时发生崩溃")
+                      .setMessage(log)
+                      .setPositiveButton("关闭", null)
+                      .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard("崩溃日志", log) }
+                      .show()
+              }
+              override fun onInit(status: Int) {
+                  if (status != TextToSpeech.SUCCESS) return
+                  val result = tts.setLanguage(Locale.CHINESE)
+                  if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) return
+                  availableVoices = tts.voices
+                      ?.asSequence()
+                      ?.filter { it.locale.language == "zh" }
+                      ?.distinctBy { it.name }
+                      ?.sortedBy { it.name }
+                      ?.toList()
+                      ?: emptyList()
+                  selectedVoiceName?.let { name ->
+                      availableVoices.firstOrNull { it.name == name }?.let { tts.voice = it }
+                  }
+              }
+              override fun onStop() {
+                  scheduleHistorySave(immediate = true)
+                  super.onStop()
+              }
               override fun onDestroy() {
-                  if (::tts.isInitialized) { tts.stop(); tts.shutdown() }
                   pollingJob?.cancel()
+                  sessionStartJob?.cancel()
+                  messageJob?.cancel()
+                  historySaveJob?.cancel()
+                  typingJobs.values.forEach { it.cancel() }
+                  typingJobs.clear()
+                  textRecognizer?.close()
+                  textRecognizer = null
+                  imageCache.evictAll()
+                  if (::tts.isInitialized) {
+                      tts.stop()
+                      tts.shutdown()
+                  }
+                  chatRecycler.removeCallbacks(scrollRunnable)
+                  pythonDispatcher.close()
                   super.onDestroy()
               }
-
               private fun bindViews() {
-                  drawerLayout = findViewById(R.id.drawer_layout); chatRecycler = findViewById(R.id.chat_recycler); historyRecycler = findViewById(R.id.history_recycler)
-                  inputMessage = findViewById(R.id.input_message); btnSend = findViewById(R.id.btn_send); btnClearAll = findViewById(R.id.btn_clear_all)
-                  btnNewSession = findViewById(R.id.btn_new_session); btnFontSize = findViewById(R.id.btn_font)
-                  btnEffect = findViewById(R.id.btn_effect); btnTts = findViewById(R.id.btn_tts)
-                  btnMenu = findViewById(R.id.btn_menu); btnImage = findViewById(R.id.btn_image); loadingBar = findViewById(R.id.loading_bar)
+                  drawerLayout = findViewById(R.id.drawer_layout)
+                  chatRecycler = findViewById(R.id.chat_recycler)
+                  historyRecycler = findViewById(R.id.history_recycler)
+                  inputMessage = findViewById(R.id.input_message)
+                  btnSend = findViewById(R.id.btn_send)
+                  btnClearAll = findViewById(R.id.btn_clear_all)
+                  btnNewSession = findViewById(R.id.btn_new_session)
+                  btnFontSize = findViewById(R.id.btn_font)
+                  btnEffect = findViewById(R.id.btn_effect)
+                  btnTts = findViewById(R.id.btn_tts)
+                  btnMenu = findViewById(R.id.btn_menu)
+                  btnImage = findViewById(R.id.btn_image)
+                  loadingBar = findViewById(R.id.loading_bar)
               }
-
               private fun setupListeners() {
                   btnMenu.setOnClickListener { drawerLayout.openDrawer(Gravity.START) }
                   btnFontSize.setOnClickListener { showFontSizeDialog() }
@@ -509,560 +737,1294 @@ jobs:
                   btnNewSession.setOnClickListener { startNewSession() }
                   btnSend.setOnClickListener { sendMessage() }
                   btnClearAll.setOnClickListener { showClearAllDialog() }
-                  btnImage.setOnClickListener { 
-                      Toast.makeText(this, "仅支持识别文字", Toast.LENGTH_SHORT).show()
-                      pickImageLauncher.launch("image/*") 
-                  }
-                  
-                  inputMessage.addTextChangedListener(object : TextWatcher {
-                      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                      override fun afterTextChanged(s: Editable?) { 
-                          if (currentSession.messages.size < 300) {
-                              btnSend.isEnabled = !s.isNullOrBlank() && !isProcessing && bootstrapModule != null 
-                          }
+                  btnImage.setOnClickListener {
+                      if (isOcrProcessing) {
+                          Toast.makeText(this, "正在识别上一张图片", Toast.LENGTH_SHORT).show()
+                      } else {
+                          Toast.makeText(this, "仅支持识别文字", Toast.LENGTH_SHORT).show()
+                          pickImageLauncher.launch(arrayOf("image/*"))
                       }
+                  }
+                  inputMessage.addTextChangedListener(object : TextWatcher {
+                      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                      override fun afterTextChanged(s: Editable?) = updateComposerState()
                   })
-
                   inputMessage.setOnEditorActionListener { _, actionId, _ ->
                       if (actionId == EditorInfo.IME_ACTION_SEND) {
-                          if (btnSend.isEnabled) sendMessage() else Toast.makeText(this, "系统仍在初始化或正在处理...", Toast.LENGTH_SHORT).show()
+                          if (btnSend.isEnabled) {
+                              sendMessage()
+                          } else {
+                              Toast.makeText(this, "系统仍在初始化或正在处理...", Toast.LENGTH_SHORT).show()
+                          }
                           true
-                      } else false
+                      } else {
+                          false
+                      }
                   }
               }
-
               private fun setupRecyclerViews() {
                   chatRecycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = false }
-                  chatRecycler.adapter = chatAdapter; chatAdapter.fontSize = chatFontSize
-                  // 【性能优化】：扩大底层 RecyclerView 的缓存池大小，提升快速滑动大文本时的渲染流畅度
-                  chatRecycler.setItemViewCacheSize(15) 
-                  
-                  historyRecycler.layoutManager = LinearLayoutManager(this); historyRecycler.adapter = historyAdapter
-                  historyAdapter.onItemClick = { loadSession(it) }; historyAdapter.onItemLongClick = { showDeleteDialog(it) }
+                  chatRecycler.adapter = chatAdapter
+                  chatRecycler.setHasFixedSize(true)
+                  chatRecycler.setItemViewCacheSize(6)
+                  (chatRecycler.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
+                  repeat(4) { viewType -> chatRecycler.recycledViewPool.setMaxRecycledViews(viewType, 8) }
+                  chatAdapter.fontSize = chatFontSize
+                  historyRecycler.layoutManager = LinearLayoutManager(this)
+                  historyRecycler.adapter = historyAdapter
+                  historyRecycler.setHasFixedSize(true)
+                  historyAdapter.onItemClick = { loadSession(it) }
+                  historyAdapter.onItemLongClick = { showDeleteDialog(it) }
               }
-
               private suspend fun extractAssetsToDisk(): String = withContext(Dispatchers.IO) {
-                  val destDir = File(filesDir, "chatbot"); if (!destDir.exists()) destDir.mkdirs()
-                  val checkFile = File(destDir, "corpus_vectors_cache.pkl")
-                  if (!checkFile.exists() || checkFile.length() < 1000) {
-                      val assetManager = assets; val files = assetManager.list("chatbot") ?: arrayOf()
-                      for (filename in files) { val outFile = File(destDir, filename); assetManager.open("chatbot/$filename").use { input -> outFile.outputStream().use { output -> input.copyTo(output) } } }
-                  }
-                  destDir.absolutePath
-              }
-
-              private fun initPython() {
-                  loadingBar.visibility = View.VISIBLE; btnSend.isEnabled = false; inputMessage.hint = "正在加载..."
-                  lifecycleScope.launch {
-                      try {
-                          val realFilesDir = extractAssetsToDisk()
-                          withContext(Dispatchers.IO) {
-                              if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
-                              bootstrapModule = Python.getInstance().getModule("bootstrap")
-                              val resultStr = bootstrapModule?.callAttr("init_backend", realFilesDir)?.toString()
-                              withContext(Dispatchers.Main) {
-                                  if (!resultStr.isNullOrEmpty()) {
-                                      val resultJson = JSONObject(resultStr)
-                                      if (resultJson.has("error")) { showErrorDialog("Python 核心错误", "${resultJson.getString("error")}\n\n${resultJson.optString("traceback", "")}"); return@withContext }
-                                      currentSession.id = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
-                                      val msgs = resultJson.getJSONArray("messages")
-                                      for (i in 0 until msgs.length()) {
-                                          val text = cleanText(msgs.getString(i)); val isSys = isSystemMessage(text)
-                                          val chatMsg = ChatMessage(text, isUser = false, isSystem = isSys)
-                                          chatMsg.displaySpannable = parseAnsiToSpannable(text)
-                                          currentSession.messages.add(chatMsg)
-                                      }
-                                      chatAdapter.setMessages(currentSession.messages)
-                                  }
-                                  scrollToBottom(); loadingBar.visibility = View.GONE; btnSend.isEnabled = true; inputMessage.hint = "输入消息..."; checkSystemMessageLock()
-                                  startPolling()
+                  val destination = File(filesDir, "chatbot")
+                  val marker = File(destination, ".asset_version")
+                  val essentialFile = File(destination, "lear_main.py")
+                  val markerMatches = runCatching {
+                      marker.exists() && marker.readText().trim() == ASSET_VERSION
+                  }.getOrDefault(false)
+                  val isCurrent = markerMatches && essentialFile.exists() && essentialFile.length() > 0L
+                  if (!isCurrent) {
+                      val staging = File(filesDir, "chatbot_staging")
+                      staging.deleteRecursively()
+                      check(staging.mkdirs()) { "无法创建资源临时目录" }
+                      val fileNames = assets.list("chatbot") ?: emptyArray()
+                      check(fileNames.isNotEmpty()) { "APK 中未找到 chatbot 资源" }
+                      for (fileName in fileNames) {
+                          val outputFile = File(staging, fileName)
+                          assets.open("chatbot/$fileName").buffered(64 * 1024).use { input ->
+                              outputFile.outputStream().buffered(64 * 1024).use { output ->
+                                  input.copyTo(output, 64 * 1024)
                               }
                           }
-                      } catch (e: Throwable) { withContext(Dispatchers.Main) { loadingBar.visibility = View.GONE; inputMessage.hint = "初始化失败"; showErrorDialog("底层环境异常", e.stackTraceToString()) } }
+                      }
+                      File(staging, ".asset_version").writeText(ASSET_VERSION)
+                      destination.deleteRecursively()
+                      check(staging.renameTo(destination)) { "无法替换本地机器人资源" }
+                  }
+                  destination.absolutePath
+              }
+              private fun initPython() {
+                  beginBusyOperation()
+                  isSessionStarting = true
+                  btnMenu.isEnabled = false
+                  drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
+                  updateComposerState("正在加载...")
+                  val targetSession = currentSession
+                  val generation = sessionGeneration
+                  lifecycleScope.launch {
+                      try {
+                          val filesPath = extractAssetsToDisk()
+                          val result = withContext(pythonDispatcher) {
+                              if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
+                              val module = Python.getInstance().getModule("bootstrap")
+                              bootstrapModule = module
+                              parseSessionStartResult(module.callAttr("init_backend", filesPath).toString())
+                          }
+                          if (targetSession !== currentSession || generation != sessionGeneration) return@launch
+                          if (result.error != null) {
+                              showErrorDialog(
+                                  "Python 核心错误",
+                                  "${result.error}\n\n${result.traceback.orEmpty()}"
+                              )
+                          } else {
+                              targetSession.id = result.sessionId
+                              appendInitialMessages(targetSession, result.messages)
+                              chatAdapter.setMessages(targetSession.messages)
+                              scrollToBottom(smooth = false)
+                              inputMessage.hint = "输入消息..."
+                              startPolling()
+                          }
+                      } catch (error: Throwable) {
+                          if (error !is CancellationException) {
+                              inputMessage.hint = "初始化失败"
+                              showErrorDialog("底层环境异常", error.stackTraceToString())
+                          }
+                      } finally {
+                          endBusyOperation()
+                          btnMenu.isEnabled = true
+                          drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+                          if (targetSession === currentSession && generation == sessionGeneration) {
+                              isSessionStarting = false
+                              updateComposerState()
+                          }
+                      }
                   }
               }
-              
+              private fun parseSessionStartResult(jsonText: String): SessionStartResult {
+                  val json = JSONObject(jsonText)
+                  if (json.has("error")) {
+                      return SessionStartResult(
+                          sessionId = null,
+                          messages = emptyList(),
+                          error = json.optString("error", "未知错误"),
+                          traceback = json.optString("traceback", "")
+                      )
+                  }
+                  val messages = json.optJSONArray("messages").toStringList()
+                  return SessionStartResult(
+                      sessionId = json.optNullableString("session_id"),
+                      messages = messages
+                  )
+              }
+              private fun parseMessageResult(jsonText: String): MessageResult {
+                  val json = JSONObject(jsonText)
+                  if (json.has("error")) {
+                      return MessageResult(
+                          sessionId = null,
+                          replies = emptyList(),
+                          error = json.optString("error", "未知错误"),
+                          traceback = json.optString("traceback", "")
+                      )
+                  }
+                  return MessageResult(
+                      sessionId = json.optNullableString("session_id"),
+                      replies = json.optJSONArray("replies").toStringList()
+                  )
+              }
+              private fun JSONObject.optNullableString(key: String): String? =
+                  if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
+              private fun JSONArray?.toStringList(): List<String> {
+                  if (this == null || length() == 0) return emptyList()
+                  return List(length()) { index -> optString(index, "") }
+              }
+              private fun appendInitialMessages(session: ChatSession, rawMessages: List<String>) {
+                  for (rawText in rawMessages) {
+                      val text = cleanText(rawText)
+                      if (text.isBlank()) continue
+                      val message = ChatMessage(text, isUser = false, isSystem = isSystemMessage(text))
+                      message.displaySpannable = parseAnsiToSpannable(text)
+                      session.messages.add(message)
+                  }
+              }
               private fun startPolling() {
                   pollingJob?.cancel()
                   pollingJob = lifecycleScope.launch {
-                      while(true) {
-                          delay(1000)
-                          if (bootstrapModule != null && currentSession.id != null) {
-                              try {
-                                  val resultStr = withContext(Dispatchers.IO) { bootstrapModule?.callAttr("poll_async")?.toString() }
-                                  if (!resultStr.isNullOrEmpty() && resultStr != "[]") {
-                                      val msgs = JSONArray(resultStr)
-                                      var hasNew = false
-                                      for (i in 0 until msgs.length()) {
-                                          val reply = msgs.getString(i); val cleanReply = cleanText(reply)
-                                          if (cleanReply.isNotBlank()) {
-                                              val botMsg = ChatMessage(cleanReply, isUser = false, isSystem = isSystemMessage(cleanReply))
-                                              currentSession.messages.add(botMsg); chatAdapter.addMessage(botMsg); hasNew = true
-                                              
-                                              if (isTtsEnabled && !botMsg.isSystem && ::tts.isInitialized) {
-                                                  tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch)
-                                                  tts.speak(stripAnsi(cleanReply), TextToSpeech.QUEUE_ADD, null, null)
-                                              }
-                                              
-                                              if (isTypewriterEnabled && !botMsg.isSystem) {
-                                                  animateTypewriter(botMsg, cleanReply)
-                                              } else {
-                                                  botMsg.displaySpannable = parseAnsiToSpannable(cleanReply)
-                                                  val pos = currentSession.messages.indexOf(botMsg)
-                                                  if (pos != -1) chatAdapter.notifyItemChanged(pos, "typing")
-                                              }
-                                          }
-                                      }
-                                      if (hasNew) { scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock() }
-                                  }
-                              } catch (e: Exception) {}
+                      while (isActive) {
+                          delay(1000L)
+                          val module = bootstrapModule ?: continue
+                          val targetSession = currentSession
+                          val generation = sessionGeneration
+                          if (targetSession.id == null || isSessionStarting) continue
+                          try {
+                              val resultText = withContext(pythonDispatcher) {
+                                  module.callAttr("poll_async").toString()
+                              }
+                              if (targetSession !== currentSession || generation != sessionGeneration) continue
+                              if (resultText.isBlank() || resultText == "[]") continue
+                              val messages = JSONArray(resultText).toStringList()
+                              var hasNewMessage = false
+                              for (rawReply in messages) {
+                                  val cleanReply = cleanText(rawReply)
+                                  if (cleanReply.isBlank()) continue
+                                  addBotReply(targetSession, cleanReply, generation)
+                                  hasNewMessage = true
+                              }
+                              if (hasNewMessage) {
+                                  scrollToBottom()
+                                  scheduleHistorySave()
+                                  refreshHistory()
+                                  updateComposerState()
+                              }
+                          } catch (error: CancellationException) {
+                              throw error
+                          } catch (_: Exception) {
+                              // 异步轮询失败不应让主界面崩溃，下次轮询会自动重试。
                           }
                       }
                   }
               }
-
-              // 智能阻尼加速打字机算法
-              private suspend fun animateTypewriter(botMsg: ChatMessage, fullText: String) {
+              private suspend fun addBotReply(
+                  targetSession: ChatSession,
+                  cleanReply: String,
+                  generation: Long
+              ) {
+                  val botMessage = ChatMessage(
+                      cleanReply,
+                      isUser = false,
+                      isSystem = isSystemMessage(cleanReply)
+                  )
+                  targetSession.messages.add(botMessage)
+                  val adapterPosition = if (targetSession === currentSession && generation == sessionGeneration) {
+                      chatAdapter.addMessage(botMessage)
+                  } else {
+                      -1
+                  }
+                  if (targetSession === currentSession && generation == sessionGeneration) {
+                      speakMessageIfNeeded(botMessage)
+                  }
+                  if (isTypewriterEnabled && !botMessage.isSystem && adapterPosition >= 0) {
+                      animateTypewriter(botMessage, cleanReply, targetSession, generation, adapterPosition)
+                  } else {
+                      botMessage.displaySpannable = parseAnsiToSpannable(cleanReply)
+                      if (adapterPosition >= 0) chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
+                  }
+              }
+              private suspend fun animateTypewriter(
+                  botMessage: ChatMessage,
+                  fullText: String,
+                  targetSession: ChatSession,
+                  generation: Long,
+                  adapterPosition: Int
+              ) {
                   val fullSpan = parseAnsiToSpannable(fullText)
-                  val len = fullSpan.length
-                  var currentDelay = 35f 
-                  val minDelay = 2f      
-                  val acceleration = if (len > 0) (35f - 2f) / len else 0f
-
-                  for (i in 1..len) {
-                      botMsg.displaySpannable = fullSpan.subSequence(0, i)
-                      val pos = currentSession.messages.indexOf(botMsg)
-                      if (pos != -1) {
-                          chatAdapter.notifyItemChanged(pos, "typing")
-                          if (i % 8 == 0) chatRecycler.smoothScrollToPosition(pos)
-                      }
-                      
-                      currentDelay = kotlin.math.max(minDelay, currentDelay - acceleration)
-                      var pause = currentDelay.toLong()
-                      
-                      val char = fullSpan[i - 1]
-                      if (char == '。' || char == '！' || char == '？' || char == '\n') pause += 150L
-                      else if (char == '，' || char == '、') pause += 80L
-                      delay(pause)
-                  }
-                  
-                  botMsg.displaySpannable = fullSpan
-                  val finalPos = currentSession.messages.indexOf(botMsg)
-                  if (finalPos != -1) chatAdapter.notifyItemChanged(finalPos, "typing")
-                  chatRecycler.smoothScrollToPosition(finalPos)
-              }
-
-              private fun processImage(uri: android.net.Uri) {
-                  try {
-                      val userMsg = ChatMessage("", isUser = true, imageUri = uri.toString())
-                      currentSession.messages.add(userMsg); chatAdapter.addMessage(userMsg)
-                      scrollToBottom(); saveAllHistory(); refreshHistory()
-
-                      loadingBar.visibility = View.VISIBLE
-                      val image = InputImage.fromFilePath(this, uri)
-                      val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-                      
-                      recognizer.process(image).addOnSuccessListener { visionText ->
-                          val text = visionText.text.trim()
-                          if (text.isNotBlank()) {
-                              val botMsg = ChatMessage("【图片识别提取的文字】：\n$text", isUser = false, isSystem = false)
-                              currentSession.messages.add(botMsg); chatAdapter.addMessage(botMsg)
-                              
-                              if (isTypewriterEnabled) {
-                                  lifecycleScope.launch { animateTypewriter(botMsg, botMsg.text) }
-                              } else {
-                                  botMsg.displaySpannable = parseAnsiToSpannable(botMsg.text)
-                                  val pos = currentSession.messages.indexOf(botMsg)
-                                  if (pos != -1) chatAdapter.notifyItemChanged(pos, "typing")
-                              }
-                              scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock()
-                          } else { Toast.makeText(this@MainActivity, "图片中未找到任何文字", Toast.LENGTH_SHORT).show() }
-                          loadingBar.visibility = View.GONE
-                      }.addOnFailureListener { loadingBar.visibility = View.GONE; Toast.makeText(this@MainActivity, "图片识别失败", Toast.LENGTH_SHORT).show() }
-                  } catch (e: Exception) { Toast.makeText(this@MainActivity, "图片处理异常", Toast.LENGTH_SHORT).show(); loadingBar.visibility = View.GONE }
-              }
-
-              private fun sendMessage() {
-                  if (isProcessing || bootstrapModule == null) return
-                  val text = inputMessage.text.toString().trim()
-                  if (text.isEmpty()) return
-
-                  tts.stop()
-                  inputMessage.setText(""); inputMessage.clearFocus()
-                  val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager; imm.hideSoftInputFromWindow(inputMessage.windowToken, 0)
-                  
-                  val isFirst = currentSession.messages.none { it.isUser }
-                  if (isFirst) { currentSession.preview = if (text.length > 12) text.substring(0, 12) + "..." else text; if (currentSession !in histories) histories.add(0, currentSession) }
-                  val userMsg = ChatMessage(text, isUser = true); currentSession.messages.add(userMsg); chatAdapter.addMessage(userMsg)
-                  scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock()
-
-                  isProcessing = true; btnSend.text = "发送中"; btnSend.isEnabled = false; loadingBar.visibility = View.VISIBLE
-
-                  val sid = currentSession.id
-                  lifecycleScope.launch {
-                      try {
-                          val resultPair = withContext(Dispatchers.IO) {
-                              val resultStr = bootstrapModule?.callAttr("process_message", text, sid)?.toString()
-                              var nsid: String? = null; val repsList = mutableListOf<String>(); var pyError: String? = null; var pyTrace: String? = null
-                              if (!resultStr.isNullOrEmpty()) {
-                                  val resultJson = JSONObject(resultStr)
-                                  if (resultJson.has("error")) { pyError = resultJson.getString("error"); pyTrace = resultJson.optString("traceback", "") } 
-                                  else { nsid = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id"); val reps = resultJson.getJSONArray("replies"); for (i in 0 until reps.length()) { repsList.add(reps.getString(i)) } }
-                              }
-                              Triple(repsList, nsid, Pair(pyError, pyTrace))
-                          }
-                          val pyErrorInfo = resultPair.third
-                          if (pyErrorInfo.first != null) { showErrorDialog("Python 处理错误", "${pyErrorInfo.first}\n\n${pyErrorInfo.second}") } 
-                          else {
-                              if (resultPair.second != null) currentSession.id = resultPair.second
-                              resultPair.first.forEach { reply ->
-                                  val cleanReply = cleanText(reply); val botMsg = ChatMessage(cleanReply, isUser = false, isSystem = isSystemMessage(cleanReply))
-                                  currentSession.messages.add(botMsg); chatAdapter.addMessage(botMsg)
-                                  
-                                  if (isTtsEnabled && !botMsg.isSystem && ::tts.isInitialized) {
-                                      tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch)
-                                      tts.speak(stripAnsi(cleanReply), TextToSpeech.QUEUE_ADD, null, null)
-                                  }
-                                  
-                                  if (isTypewriterEnabled && !botMsg.isSystem) {
-                                      animateTypewriter(botMsg, cleanReply)
-                                  } else {
-                                      botMsg.displaySpannable = parseAnsiToSpannable(cleanReply)
-                                      val pos = currentSession.messages.indexOf(botMsg)
-                                      if (pos != -1) chatAdapter.notifyItemChanged(pos, "typing")
-                                  }
-                              }
-                              scrollToBottom(); saveAllHistory(); refreshHistory(); checkSystemMessageLock()
-                          }
-                      } catch (e: Throwable) { showErrorDialog("环境通信异常", e.stackTraceToString()) } 
-                      finally { isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = inputMessage.text.isNotBlank(); loadingBar.visibility = View.GONE; checkSystemMessageLock() }
-                  }
-              }
-
-              private fun startNewSession() {
-                  if (currentSession.messages.isEmpty()) { drawerLayout.closeDrawer(Gravity.START); return }
-                  tts.stop()
-                  
-                  // 【内存优化】释放之前界面的复杂 UI Spannable 对象，仅保留纯文本对象省内存
-                  histories.forEach { if (it !== currentSession) it.messages.forEach { m -> m.displaySpannable = null } }
-                  
-                  currentSession = ChatSession(); isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
-                  inputMessage.hint = "输入消息..."; drawerLayout.closeDrawer(Gravity.START)
-                  
-                  chatAdapter.setMessages(currentSession.messages)
-                  
-                  if (bootstrapModule == null) return
-                  loadingBar.visibility = View.VISIBLE; btnSend.isEnabled = false; inputMessage.hint = "正在加载..."
-                  lifecycleScope.launch {
-                      try {
-                          val realFilesDir = File(filesDir, "chatbot").absolutePath
-                          withContext(Dispatchers.IO) {
-                              val resultStr = bootstrapModule?.callAttr("init_backend", realFilesDir)?.toString()
-                              withContext(Dispatchers.Main) {
-                                  if (!resultStr.isNullOrEmpty()) {
-                                      val resultJson = JSONObject(resultStr)
-                                      if (resultJson.has("error")) { showErrorDialog("Python 初始化错误", "${resultJson.getString("error")}\n\n${resultJson.optString("traceback", "")}"); return@withContext }
-                                      currentSession.id = if (resultJson.isNull("session_id")) null else resultJson.getString("session_id")
-                                      val msgs = resultJson.getJSONArray("messages")
-                                      for (i in 0 until msgs.length()) {
-                                          val text = cleanText(msgs.getString(i)); val chatMsg = ChatMessage(text, isUser = false, isSystem = isSystemMessage(text))
-                                          chatMsg.displaySpannable = parseAnsiToSpannable(text)
-                                          currentSession.messages.add(chatMsg)
-                                          if (isTtsEnabled && !chatMsg.isSystem && ::tts.isInitialized) { tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch); tts.speak(stripAnsi(text), TextToSpeech.QUEUE_ADD, null, null) }
-                                      }
-                                      chatAdapter.setMessages(currentSession.messages)
-                                  }
-                                  scrollToBottom(); loadingBar.visibility = View.GONE; btnSend.isEnabled = true; inputMessage.hint = "输入消息..."; checkSystemMessageLock()
-                              }
-                          }
-                      } catch (e: Throwable) { withContext(Dispatchers.Main) { loadingBar.visibility = View.GONE; showErrorDialog("重启对话异常", e.stackTraceToString()) } }
-                  }
-              }
-
-              private fun loadSession(session: ChatSession) {
-                  drawerLayout.closeDrawer(Gravity.START); if (session === currentSession) return
-                  tts.stop()
-                  
-                  // 【内存优化】释放之前界面的复杂 UI Spannable 对象，仅保留纯文本对象省内存
-                  histories.forEach { if (it !== session) it.messages.forEach { m -> m.displaySpannable = null } }
-                  
-                  currentSession = session; isProcessing = false; btnSend.text = "发送"; btnSend.isEnabled = true
-                  inputMessage.hint = "输入消息..."
-                  session.messages.forEach { if (it.displaySpannable == null && !it.isUser) it.displaySpannable = parseAnsiToSpannable(it.text) }
-                  chatAdapter.setMessages(session.messages)
-                  scrollToBottom(); refreshHistory(); checkSystemMessageLock()
-              }
-
-              private fun deleteSession(session: ChatSession) { histories.remove(session); saveAllHistory(); refreshHistory(); if (currentSession === session) startNewSession() }
-              private fun isSystemMessage(text: String): Boolean = text.startsWith("【") && text.endsWith("】")
-              
-              private fun checkSystemMessageLock() {
-                  // 【新增】最多 300 句对话限制
-                  if (currentSession.messages.size >= 300) {
-                      btnSend.isEnabled = false; inputMessage.isEnabled = false
-                      inputMessage.hint = "您已到达最大对话限制（300条）"
+                  val length = fullSpan.length
+                  if (length == 0) {
+                      botMessage.displaySpannable = fullSpan
                       return
                   }
-
-                  val endKeywords = listOf("结束", "终止", "离开", "踢出", "换个话题", "重新开始", "逃离", "逃跑", "中断", "下线", "再见")
-                  val endSysIdx = currentSession.messages.indexOfLast { msg -> 
-                      msg.isSystem && endKeywords.any { kw -> msg.text.contains(kw) } 
-                  }
-                  if (endSysIdx != -1) {
-                      val userMsgsAfterEnd = currentSession.messages.subList(endSysIdx + 1, currentSession.messages.size).count { it.isUser }
-                      if (userMsgsAfterEnd >= 1) {
-                          btnSend.isEnabled = false; inputMessage.isEnabled = false
-                          inputMessage.hint = "对话已彻底锁定"
-                      } else {
-                          inputMessage.isEnabled = true
-                          inputMessage.hint = "对话已结束(还可发送最后一条)"
+                  var currentDelay = 35f
+                  val minDelay = 2f
+                  val acceleration = (35f - minDelay) / length
+                  var lastUiUpdate = 0L
+                  var lastScroll = 0L
+                  for (index in 1..length) {
+                      if (targetSession !== currentSession || generation != sessionGeneration) {
+                          botMessage.displaySpannable = fullSpan
+                          return
                       }
+                      currentDelay = max(minDelay, currentDelay - acceleration)
+                      val character = fullSpan[index - 1]
+                      var pause = currentDelay.toLong()
+                      pause += when (character) {
+                          '。', '！', '？', '\n' -> 150L
+                          '，', '、' -> 80L
+                          else -> 0L
+                      }
+                      delay(pause)
+                      val now = SystemClock.uptimeMillis()
+                      val punctuation = character == '。' || character == '！' || character == '？' ||
+                          character == '，' || character == '、' || character == '\n'
+                      if (index == length || punctuation || now - lastUiUpdate >= 16L) {
+                          botMessage.displaySpannable = fullSpan.subSequence(0, index)
+                          if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
+                              chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
+                              if (now - lastScroll >= 80L && isChatNearBottom()) {
+                                  scrollToBottom(smooth = false)
+                                  lastScroll = now
+                              }
+                          }
+                          lastUiUpdate = now
+                      }
+                  }
+                  botMessage.displaySpannable = fullSpan
+                  if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
+                      chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
+                      scrollToBottom()
+                  }
+              }
+              private fun processImage(uri: Uri) {
+                  if (isOcrProcessing) return
+                  isOcrProcessing = true
+                  beginBusyOperation()
+                  updateComposerState()
+                  val targetSession = currentSession
+                  val generation = sessionGeneration
+                  val userMessage = ChatMessage("", isUser = true, imageUri = uri.toString())
+                  targetSession.messages.add(userMessage)
+                  chatAdapter.addMessage(userMessage)
+                  scrollToBottom()
+                  ensureSessionInHistory(targetSession)
+                  scheduleHistorySave()
+                  refreshHistory()
+                  try {
+                      val image = InputImage.fromFilePath(this, uri)
+                      val recognizer = textRecognizer ?: TextRecognition.getClient(
+                          ChineseTextRecognizerOptions.Builder().build()
+                      ).also { textRecognizer = it }
+                      recognizer.process(image)
+                          .addOnSuccessListener { visionText ->
+                              if (targetSession !== currentSession || generation != sessionGeneration) {
+                                  return@addOnSuccessListener
+                              }
+                              val text = visionText.text.trim()
+                              if (text.isBlank()) {
+                                  Toast.makeText(this, "图片中未找到任何文字", Toast.LENGTH_SHORT).show()
+                              } else {
+                                  val botMessage = ChatMessage(
+                                      "【图片识别提取的文字】：\n$text",
+                                      isUser = false,
+                                      isSystem = false
+                                  )
+                                  targetSession.messages.add(botMessage)
+                                  val position = chatAdapter.addMessage(botMessage)
+                                  if (isTypewriterEnabled) {
+                                      val job = lifecycleScope.launch {
+                                          animateTypewriter(
+                                              botMessage,
+                                              botMessage.text,
+                                              targetSession,
+                                              generation,
+                                              position
+                                          )
+                                      }
+                                      typingJobs[botMessage.localId] = job
+                                      job.invokeOnCompletion { typingJobs.remove(botMessage.localId) }
+                                  } else {
+                                      botMessage.displaySpannable = parseAnsiToSpannable(botMessage.text)
+                                      chatAdapter.notifyItemChanged(position, PAYLOAD_TYPING)
+                                  }
+                                  scrollToBottom()
+                                  scheduleHistorySave()
+                                  refreshHistory()
+                              }
+                          }
+                          .addOnFailureListener {
+                              if (targetSession === currentSession && generation == sessionGeneration) {
+                                  Toast.makeText(this, "图片识别失败", Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                          .addOnCompleteListener {
+                              isOcrProcessing = false
+                              endBusyOperation()
+                              updateComposerState()
+                          }
+                  } catch (error: Exception) {
+                      isOcrProcessing = false
+                      endBusyOperation()
+                      updateComposerState()
+                      Toast.makeText(this, "图片处理异常", Toast.LENGTH_SHORT).show()
+                  }
+              }
+              private fun sendMessage() {
+                  val module = bootstrapModule ?: return
+                  if (isProcessing || isSessionStarting) return
+                  val text = inputMessage.text.toString().trim()
+                  if (text.isEmpty()) return
+                  val targetSession = currentSession
+                  val generation = sessionGeneration
+                  val sessionId = targetSession.id
+                  if (::tts.isInitialized) tts.stop()
+                  inputMessage.setText("")
+                  inputMessage.clearFocus()
+                  (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                      .hideSoftInputFromWindow(inputMessage.windowToken, 0)
+                  val isFirstUserMessage = targetSession.messages.none { it.isUser }
+                  if (isFirstUserMessage) {
+                      targetSession.preview = if (text.length > 12) text.take(12) + "..." else text
+                      ensureSessionInHistory(targetSession)
+                  }
+                  val userMessage = ChatMessage(text, isUser = true)
+                  targetSession.messages.add(userMessage)
+                  chatAdapter.addMessage(userMessage)
+                  scrollToBottom()
+                  scheduleHistorySave()
+                  refreshHistory()
+                  isProcessing = true
+                  btnSend.text = "发送中"
+                  beginBusyOperation()
+                  updateComposerState()
+                  messageJob = lifecycleScope.launch {
+                      try {
+                          val result = withContext(pythonDispatcher) {
+                              parseMessageResult(
+                                  module.callAttr("process_message", text, sessionId).toString()
+                              )
+                          }
+                          if (result.error != null) {
+                              if (targetSession === currentSession && generation == sessionGeneration) {
+                                  showErrorDialog(
+                                      "Python 处理错误",
+                                      "${result.error}\n\n${result.traceback.orEmpty()}"
+                                  )
+                              }
+                          } else {
+                              if (result.sessionId != null) targetSession.id = result.sessionId
+                              for (reply in result.replies) {
+                                  val cleanReply = cleanText(reply)
+                                  if (cleanReply.isNotBlank()) {
+                                      addBotReply(targetSession, cleanReply, generation)
+                                  }
+                              }
+                              scheduleHistorySave()
+                              refreshHistory()
+                              if (targetSession === currentSession && generation == sessionGeneration) {
+                                  scrollToBottom()
+                              }
+                          }
+                      } catch (error: Throwable) {
+                          if (error !is CancellationException &&
+                              targetSession === currentSession &&
+                              generation == sessionGeneration
+                          ) {
+                              showErrorDialog("环境通信异常", error.stackTraceToString())
+                          }
+                      } finally {
+                          endBusyOperation()
+                          if (targetSession === currentSession && generation == sessionGeneration) {
+                              isProcessing = false
+                              btnSend.text = "发送"
+                              updateComposerState()
+                          }
+                      }
+                  }
+              }
+              private fun startNewSession(force: Boolean = false) {
+                  if (!force && currentSession.messages.isEmpty()) {
+                      drawerLayout.closeDrawer(Gravity.START)
+                      return
+                  }
+                  if (::tts.isInitialized) tts.stop()
+                  typingJobs.values.forEach { it.cancel() }
+                  typingJobs.clear()
+                  sessionStartJob?.cancel()
+                  releaseInactiveSpans(except = null)
+                  sessionGeneration += 1L
+                  val generation = sessionGeneration
+                  val newSession = ChatSession()
+                  currentSession = newSession
+                  isProcessing = false
+                  btnSend.text = "发送"
+                  chatAdapter.setMessages(newSession.messages)
+                  drawerLayout.closeDrawer(Gravity.START)
+                  val module = bootstrapModule
+                  if (module == null) {
+                      updateComposerState("正在加载...")
+                      return
+                  }
+                  beginBusyOperation()
+                  isSessionStarting = true
+                  updateComposerState("正在加载...")
+                  sessionStartJob = lifecycleScope.launch {
+                      try {
+                          val result = withContext(pythonDispatcher) {
+                              parseSessionStartResult(module.callAttr("start_new_session").toString())
+                          }
+                          if (newSession !== currentSession || generation != sessionGeneration) return@launch
+                          if (result.error != null) {
+                              showErrorDialog(
+                                  "Python 初始化错误",
+                                  "${result.error}\n\n${result.traceback.orEmpty()}"
+                              )
+                          } else {
+                              newSession.id = result.sessionId
+                              appendInitialMessages(newSession, result.messages)
+                              newSession.messages.forEach { speakMessageIfNeeded(it) }
+                              chatAdapter.setMessages(newSession.messages)
+                              scrollToBottom(smooth = false)
+                              inputMessage.hint = "输入消息..."
+                          }
+                      } catch (error: Throwable) {
+                          if (error !is CancellationException &&
+                              newSession === currentSession &&
+                              generation == sessionGeneration
+                          ) {
+                              showErrorDialog("重启对话异常", error.stackTraceToString())
+                          }
+                      } finally {
+                          endBusyOperation()
+                          if (newSession === currentSession && generation == sessionGeneration) {
+                              isSessionStarting = false
+                              updateComposerState()
+                          }
+                      }
+                  }
+              }
+              private fun loadSession(session: ChatSession) {
+                  drawerLayout.closeDrawer(Gravity.START)
+                  if (session === currentSession) return
+                  if (::tts.isInitialized) tts.stop()
+                  typingJobs.values.forEach { it.cancel() }
+                  typingJobs.clear()
+                  sessionStartJob?.cancel()
+                  releaseInactiveSpans(except = session)
+                  sessionGeneration += 1L
+                  val generation = sessionGeneration
+                  currentSession = session
+                  isProcessing = false
+                  btnSend.text = "发送"
+                  session.messages.forEach { message ->
+                      if (message.displaySpannable == null && !message.isUser) {
+                          message.displaySpannable = parseAnsiToSpannable(message.text)
+                      }
+                  }
+                  chatAdapter.setMessages(session.messages)
+                  scrollToBottom(smooth = false)
+                  refreshHistory()
+                  val module = bootstrapModule
+                  if (module == null) {
+                      updateComposerState("正在加载...")
+                      return
+                  }
+                  // Python 会话只存在于当前进程中。载入历史记录时创建一个新的底层会话，
+                  // 避免把上次运行留下的失效 session_id 继续传给后端。
+                  beginBusyOperation()
+                  isSessionStarting = true
+                  updateComposerState("正在加载...")
+                  sessionStartJob = lifecycleScope.launch {
+                      try {
+                          val result = withContext(pythonDispatcher) {
+                              parseSessionStartResult(module.callAttr("start_new_session").toString())
+                          }
+                          if (session !== currentSession || generation != sessionGeneration) return@launch
+                          if (result.error != null) {
+                              showErrorDialog(
+                                  "Python 初始化错误",
+                                  "${result.error}\n\n${result.traceback.orEmpty()}"
+                              )
+                          } else {
+                              session.id = result.sessionId
+                          }
+                      } catch (error: Throwable) {
+                          if (error !is CancellationException &&
+                              session === currentSession &&
+                              generation == sessionGeneration
+                          ) {
+                              showErrorDialog("载入对话异常", error.stackTraceToString())
+                          }
+                      } finally {
+                          endBusyOperation()
+                          if (session === currentSession && generation == sessionGeneration) {
+                              isSessionStarting = false
+                              updateComposerState()
+                          }
+                      }
+                  }
+              }
+              private fun ensureSessionInHistory(session: ChatSession) {
+                  if (histories.none { it === session }) histories.add(0, session)
+                  trimHistories()
+              }
+              private fun trimHistories() {
+                  while (histories.size > MAX_HISTORY) {
+                      val removed = histories.removeAt(histories.lastIndex)
+                      removed.messages.forEach { it.displaySpannable = null }
+                  }
+              }
+              private fun releaseInactiveSpans(except: ChatSession?) {
+                  histories.forEach { session ->
+                      if (session !== except) session.messages.forEach { it.displaySpannable = null }
+                  }
+              }
+              private fun deleteSession(session: ChatSession) {
+                  val index = histories.indexOfFirst { it === session }
+                  if (index >= 0) histories.removeAt(index)
+                  session.messages.forEach { it.displaySpannable = null }
+                  scheduleHistorySave(immediate = true)
+                  refreshHistory()
+                  if (currentSession === session) startNewSession(force = true)
+              }
+              private fun isSystemMessage(text: String): Boolean {
+                  val visibleText = stripAnsi(text).trim()
+                  return visibleText.startsWith("【") && visibleText.endsWith("】")
+              }
+              private fun updateComposerState(forcedHint: String? = null) {
+                  val messageLimitReached = currentSession.messages.size >= MAX_MESSAGES
+                  val endKeywords = listOf(
+                      "结束", "终止", "离开", "踢出", "换个话题", "重新开始",
+                      "逃离", "逃跑", "中断", "下线", "再见"
+                  )
+                  val endSystemIndex = currentSession.messages.indexOfLast { message ->
+                      message.isSystem && endKeywords.any { keyword -> message.text.contains(keyword) }
+                  }
+                  val userMessagesAfterEnd = if (endSystemIndex >= 0) {
+                      currentSession.messages
+                          .asSequence()
+                          .drop(endSystemIndex + 1)
+                          .count { it.isUser }
                   } else {
-                      inputMessage.isEnabled = true
-                      if (inputMessage.hint.toString().contains("结束") || inputMessage.hint.toString().contains("锁定") || inputMessage.hint.toString().contains("300条") || inputMessage.hint.toString() == "正在加载...") {
-                          inputMessage.hint = "输入消息..."
-                      }
+                      0
                   }
+                  val hardLocked = endSystemIndex >= 0 && userMessagesAfterEnd >= 1
+                  val canUseInput = !messageLimitReached && !hardLocked
+                  inputMessage.isEnabled = canUseInput
+                  inputMessage.hint = forcedHint ?: when {
+                      messageLimitReached -> "您已到达最大对话限制（300条）"
+                      hardLocked -> "对话已彻底锁定"
+                      endSystemIndex >= 0 -> "对话已结束(还可发送最后一条)"
+                      isSessionStarting || bootstrapModule == null -> "正在加载..."
+                      else -> "输入消息..."
+                  }
+                  val backendReady = bootstrapModule != null && !isSessionStarting && !isProcessing
+                  btnSend.isEnabled = canUseInput && backendReady && inputMessage.text.isNotBlank()
+                  btnImage.isEnabled = !isOcrProcessing
               }
-
-              private fun showErrorDialog(title: String, message: String) { 
+              private fun beginBusyOperation() {
+                  busyOperations += 1
+                  loadingBar.visibility = View.VISIBLE
+              }
+              private fun endBusyOperation() {
+                  busyOperations = max(0, busyOperations - 1)
+                  if (busyOperations == 0) loadingBar.visibility = View.GONE
+              }
+              private fun showErrorDialog(title: String, message: String) {
                   if (isFinishing || isDestroyed) return
-                  AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("确定", null).setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }.show() 
+                  AlertDialog.Builder(this)
+                      .setTitle(title)
+                      .setMessage(message)
+                      .setPositiveButton("确定", null)
+                      .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard(title, message) }
+                      .show()
               }
-              
-              private fun copyToClipboard(label: String, text: String) { val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; clipboard.setPrimaryClip(ClipData.newPlainText(label, text)); Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show() }
-              
+              private fun copyToClipboard(label: String, text: String) {
+                  val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                  clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+                  Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+              }
               private fun showFontSizeDialog() {
-                  val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 32, 48, 16) }
-                  val label = TextView(this).apply { text = "当前字号: $chatFontSize"; setPadding(0, 0, 0, 24); textSize = 16f }
-                  val slider = SeekBar(this).apply { max = 14; progress = chatFontSize - 10 }
-                  slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) { chatFontSize = progress + 10; label.text = "当前字号: $chatFontSize" } override fun onStartTrackingTouch(sb: SeekBar?) {} override fun onStopTrackingTouch(sb: SeekBar?) {} })
-                  container.addView(label); container.addView(slider)
-                  AlertDialog.Builder(this).setTitle("调节字体大小").setView(container).setPositiveButton("完成") { _, _ -> saveSettings(); chatAdapter.fontSize = chatFontSize; chatAdapter.notifyDataSetChanged() }.show()
-              }
-
-              private fun showEffectDialog() {
-                  val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 32, 48, 16) }
-                  val switchTypewriter = Switch(this).apply { text = "开启打字机效果"; isChecked = isTypewriterEnabled; textSize = 16f }
-                  container.addView(switchTypewriter)
-                  AlertDialog.Builder(this).setTitle("输出效果").setView(container).setPositiveButton("完成") { _, _ -> isTypewriterEnabled = switchTypewriter.isChecked; saveSettings() }.show()
-              }
-
-              private fun showTtsDialog() {
-                  val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 32, 48, 16) }
-                  val switchTts = Switch(this).apply { text = "开启语音播报"; isChecked = isTtsEnabled; setPadding(0, 0, 0, 32); textSize = 16f }
-                  
-                  val btnVoice = MaterialButton(this).apply { text = "选择本地音色 (${availableVoices.size}种)"; setPadding(0, 0, 0, 16) }
-                  btnVoice.setOnClickListener {
-                      if (availableVoices.isEmpty()) { Toast.makeText(this@MainActivity, "手机未安装中文语音包", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
-                      val names = availableVoices.map { it.name }.toTypedArray()
-                      val currentIdx = availableVoices.indexOfFirst { it.name == selectedVoiceName }.takeIf { it >= 0 } ?: 0
-                      AlertDialog.Builder(this@MainActivity).setSingleChoiceItems(names, currentIdx) { d, w ->
-                          selectedVoiceName = names[w]; tts.voice = availableVoices[w]; saveSettings()
-                      }.setPositiveButton("确定", null).show()
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 32, 48, 16)
                   }
-
-                  val lblSpeed = TextView(this).apply { text = "语速: ${"%.1f".format(ttsSpeed)}x"; setPadding(0, 16, 0, 8) }
-                  val sliderSpeed = SeekBar(this).apply { max = 15; progress = ((ttsSpeed - 0.5f) * 10).toInt() }
-                  val lblPitch = TextView(this).apply { text = "音调: ${"%.1f".format(ttsPitch)}x"; setPadding(0, 32, 0, 8) }
-                  val sliderPitch = SeekBar(this).apply { max = 15; progress = ((ttsPitch - 0.5f) * 10).toInt() }
-
-                  sliderSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(sb: SeekBar?, p: Int, b: Boolean) { ttsSpeed = 0.5f + p / 10f; lblSpeed.text = "语速: ${"%.1f".format(ttsSpeed)}x" } override fun onStartTrackingTouch(sb: SeekBar?) {} override fun onStopTrackingTouch(sb: SeekBar?) {} })
-                  sliderPitch.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener { override fun onProgressChanged(sb: SeekBar?, p: Int, b: Boolean) { ttsPitch = 0.5f + p / 10f; lblPitch.text = "音调: ${"%.1f".format(ttsPitch)}x" } override fun onStartTrackingTouch(sb: SeekBar?) {} override fun onStopTrackingTouch(sb: SeekBar?) {} })
-
-                  val btnPreview = MaterialButton(this).apply { 
+                  val label = TextView(this).apply {
+                      text = "当前字号: $chatFontSize"
+                      setPadding(0, 0, 0, 24)
+                      textSize = 16f
+                  }
+                  val slider = SeekBar(this).apply {
+                      max = 14
+                      progress = chatFontSize - 10
+                  }
+                  slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          chatFontSize = progress + 10
+                          label.text = "当前字号: $chatFontSize"
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                  })
+                  container.addView(label)
+                  container.addView(slider)
+                  AlertDialog.Builder(this)
+                      .setTitle("调节字体大小")
+                      .setView(container)
+                      .setPositiveButton("完成") { _, _ ->
+                          saveSettings()
+                          chatAdapter.fontSize = chatFontSize
+                          chatAdapter.notifyDataSetChanged()
+                      }
+                      .show()
+              }
+              private fun showEffectDialog() {
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 32, 48, 16)
+                  }
+                  val switchTypewriter = Switch(this).apply {
+                      text = "开启打字机效果"
+                      isChecked = isTypewriterEnabled
+                      textSize = 16f
+                  }
+                  container.addView(switchTypewriter)
+                  AlertDialog.Builder(this)
+                      .setTitle("输出效果")
+                      .setView(container)
+                      .setPositiveButton("完成") { _, _ ->
+                          isTypewriterEnabled = switchTypewriter.isChecked
+                          saveSettings()
+                      }
+                      .show()
+              }
+              private fun showTtsDialog() {
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 32, 48, 16)
+                  }
+                  val switchTts = Switch(this).apply {
+                      text = "开启语音播报"
+                      isChecked = isTtsEnabled
+                      setPadding(0, 0, 0, 32)
+                      textSize = 16f
+                  }
+                  val btnVoice = MaterialButton(this).apply {
+                      text = "选择本地音色 (${availableVoices.size}种)"
+                      setPadding(0, 0, 0, 16)
+                  }
+                  btnVoice.setOnClickListener {
+                      if (availableVoices.isEmpty()) {
+                          Toast.makeText(this, "手机未安装中文语音包", Toast.LENGTH_SHORT).show()
+                          return@setOnClickListener
+                      }
+                      val names = availableVoices.map { it.name }.toTypedArray()
+                      val currentIndex = availableVoices
+                          .indexOfFirst { it.name == selectedVoiceName }
+                          .takeIf { it >= 0 }
+                          ?: 0
+                      AlertDialog.Builder(this)
+                          .setSingleChoiceItems(names, currentIndex) { _, which ->
+                              selectedVoiceName = names[which]
+                              tts.voice = availableVoices[which]
+                              saveSettings()
+                          }
+                          .setPositiveButton("确定", null)
+                          .show()
+                  }
+                  val speedLabel = TextView(this).apply {
+                      text = "语速: ${"%.1f".format(ttsSpeed)}x"
+                      setPadding(0, 16, 0, 8)
+                  }
+                  val speedSlider = SeekBar(this).apply {
+                      max = 15
+                      progress = ((ttsSpeed - 0.5f) * 10).toInt()
+                  }
+                  val pitchLabel = TextView(this).apply {
+                      text = "音调: ${"%.1f".format(ttsPitch)}x"
+                      setPadding(0, 32, 0, 8)
+                  }
+                  val pitchSlider = SeekBar(this).apply {
+                      max = 15
+                      progress = ((ttsPitch - 0.5f) * 10).toInt()
+                  }
+                  speedSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          ttsSpeed = 0.5f + progress / 10f
+                          speedLabel.text = "语速: ${"%.1f".format(ttsSpeed)}x"
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                  })
+                  pitchSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          ttsPitch = 0.5f + progress / 10f
+                          pitchLabel.text = "音调: ${"%.1f".format(ttsPitch)}x"
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                  })
+                  val btnPreview = MaterialButton(this).apply {
                       text = "🔊 试听当前声音"
                       setPadding(0, 16, 0, 0)
                       backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E0E0E0"))
-                      setTextColor(Color.BLACK) 
+                      setTextColor(Color.BLACK)
                   }
                   btnPreview.setOnClickListener {
                       if (::tts.isInitialized) {
-                          tts.setSpeechRate(ttsSpeed); tts.setPitch(ttsPitch)
-                          selectedVoiceName?.let { name -> availableVoices.find { it.name == name }?.let { tts.voice = it } }
+                          tts.setSpeechRate(ttsSpeed)
+                          tts.setPitch(ttsPitch)
+                          selectedVoiceName?.let { name ->
+                              availableVoices.firstOrNull { it.name == name }?.let { tts.voice = it }
+                          }
                           tts.speak("你好，这是我现在的声音。", TextToSpeech.QUEUE_FLUSH, null, null)
                       }
                   }
-
-                  container.addView(switchTts); container.addView(btnVoice); container.addView(lblSpeed); container.addView(sliderSpeed); container.addView(lblPitch); container.addView(sliderPitch); container.addView(btnPreview)
-                  AlertDialog.Builder(this).setTitle("语音设置").setView(container).setPositiveButton("完成") { _, _ -> isTtsEnabled = switchTts.isChecked; saveSettings(); if(!isTtsEnabled) tts.stop() }.show()
+                  container.addView(switchTts)
+                  container.addView(btnVoice)
+                  container.addView(speedLabel)
+                  container.addView(speedSlider)
+                  container.addView(pitchLabel)
+                  container.addView(pitchSlider)
+                  container.addView(btnPreview)
+                  AlertDialog.Builder(this)
+                      .setTitle("语音设置")
+                      .setView(container)
+                      .setPositiveButton("完成") { _, _ ->
+                          isTtsEnabled = switchTts.isChecked
+                          saveSettings()
+                          if (!isTtsEnabled) tts.stop()
+                      }
+                      .show()
               }
-
-              private fun showDeleteDialog(session: ChatSession) { AlertDialog.Builder(this).setTitle("提示").setMessage("是否删除此记录？").setPositiveButton("删除") { _, _ -> deleteSession(session) }.setNegativeButton("取消", null).show() }
-              private fun showClearAllDialog() { AlertDialog.Builder(this).setTitle("警告").setMessage("确认清空所有聊天记录？").setPositiveButton("清空") { _, _ -> histories.clear(); saveAllHistory(); refreshHistory(); chatAdapter.clearMessages(); currentSession = ChatSession(); startNewSession() }.setNegativeButton("取消", null).show() }
-
-              private fun saveAllHistory() {
-                  val snap = histories.map { session -> ChatSession(session.id, session.preview, session.messages.map { it.copy() }.toMutableList()) }.toList()
-                  lifecycleScope.launch(Dispatchers.IO) {
-                      try {
-                          val arr = JSONArray()
-                          snap.filter { it.messages.any { m -> m.isUser } }.take(15).forEach { s ->
-                              val obj = JSONObject(); obj.put("id", s.id ?: JSONObject.NULL); obj.put("preview", s.preview)
-                              val msgs = JSONArray(); s.messages.forEach { m -> msgs.put(JSONObject().apply { put("is_user", m.isUser); put("text", m.text); put("is_error", m.isError); put("is_system", m.isSystem); put("image_uri", m.imageUri ?: JSONObject.NULL) }) }
-                              obj.put("messages", msgs); arr.put(obj)
+              private fun showDeleteDialog(session: ChatSession) {
+                  AlertDialog.Builder(this)
+                      .setTitle("提示")
+                      .setMessage("是否删除此记录？")
+                      .setPositiveButton("删除") { _, _ -> deleteSession(session) }
+                      .setNegativeButton("取消", null)
+                      .show()
+              }
+              private fun showClearAllDialog() {
+                  AlertDialog.Builder(this)
+                      .setTitle("警告")
+                      .setMessage("确认清空所有聊天记录？")
+                      .setPositiveButton("清空") { _, _ ->
+                          histories.forEach { session ->
+                              session.messages.forEach { it.displaySpannable = null }
                           }
-                          historyFile.writeText(arr.toString())
-                      } catch (_: Exception) {}
+                          histories.clear()
+                          currentSession = ChatSession()
+                          chatAdapter.setMessages(currentSession.messages)
+                          scheduleHistorySave(immediate = true)
+                          refreshHistory()
+                          startNewSession(force = true)
+                      }
+                      .setNegativeButton("取消", null)
+                      .show()
+              }
+              private fun scheduleHistorySave(immediate: Boolean = false) {
+                  historySaveJob?.cancel()
+                  historySaveJob = lifecycleScope.launch {
+                      if (!immediate) delay(250L)
+                      val snapshot = createHistorySnapshot()
+                      withContext(Dispatchers.IO) {
+                          historyWriteMutex.withLock { writeHistorySnapshot(snapshot) }
+                      }
                   }
               }
-
-              private fun loadAllHistory() {
-                  try {
-                      if (historyFile.exists()) {
-                          val arr = JSONArray(historyFile.readText())
-                          for (i in 0 until arr.length()) {
-                              val obj = arr.getJSONObject(i); val session = ChatSession(id = if (obj.isNull("id")) null else obj.getString("id"), preview = obj.optString("preview", "新对话"))
-                              val msgs = obj.getJSONArray("messages")
-                              for (j in 0 until msgs.length()) { val m = msgs.getJSONObject(j); session.messages.add(ChatMessage(text = m.getString("text"), isUser = m.getBoolean("is_user"), isError = m.optBoolean("is_error", false), isSystem = m.optBoolean("is_system", false), imageUri = if (m.isNull("image_uri")) null else m.getString("image_uri"))) }
-                              histories.add(session)
+              private fun createHistorySnapshot(): List<SessionSnapshot> = histories
+                  .asSequence()
+                  .filter { session -> session.messages.any { it.isUser } }
+                  .take(MAX_HISTORY)
+                  .map { session ->
+                      SessionSnapshot(
+                          preview = session.preview,
+                          messages = session.messages.map { message ->
+                              MessageSnapshot(
+                                  text = message.text,
+                                  isUser = message.isUser,
+                                  isError = message.isError,
+                                  isSystem = message.isSystem,
+                                  imageUri = message.imageUri
+                              )
                           }
+                      )
+                  }
+                  .toList()
+              private fun writeHistorySnapshot(snapshot: List<SessionSnapshot>) {
+                  val array = JSONArray()
+                  snapshot.forEach { session ->
+                      val objectJson = JSONObject()
+                      objectJson.put("id", JSONObject.NULL)
+                      objectJson.put("preview", session.preview)
+                      val messagesJson = JSONArray()
+                      session.messages.forEach { message ->
+                          messagesJson.put(JSONObject().apply {
+                              put("is_user", message.isUser)
+                              put("text", message.text)
+                              put("is_error", message.isError)
+                              put("is_system", message.isSystem)
+                              put("image_uri", message.imageUri ?: JSONObject.NULL)
+                          })
                       }
-                  } catch (_: Exception) { histories.clear() }
+                      objectJson.put("messages", messagesJson)
+                      array.put(objectJson)
+                  }
+                  val temporary = File(historyFile.parentFile, "${historyFile.name}.tmp")
+                  temporary.writeText(array.toString())
+                  if (!temporary.renameTo(historyFile)) {
+                      historyFile.writeText(array.toString())
+                      temporary.delete()
+                  }
               }
-
-              private fun refreshHistory() { historyAdapter.updateList(histories.filter { it.messages.any { m -> m.isUser } }) }
-              private fun saveSettings() { try { settingsFile.writeText(JSONObject().apply{ put("font_size", chatFontSize); put("tts_on", isTtsEnabled); put("tts_speed", ttsSpeed.toDouble()); put("tts_pitch", ttsPitch.toDouble()); put("tts_voice", selectedVoiceName ?: ""); put("typewriter_on", isTypewriterEnabled) }.toString()) } catch (_: Exception) {} }
-              private fun loadSettings() { try { if (settingsFile.exists()) { val json = JSONObject(settingsFile.readText()); chatFontSize = json.optInt("font_size", 14); isTtsEnabled = json.optBoolean("tts_on", false); ttsSpeed = json.optDouble("tts_speed", 1.0).toFloat(); ttsPitch = json.optDouble("tts_pitch", 1.0).toFloat(); selectedVoiceName = json.optString("tts_voice", "").takeIf { it.isNotEmpty() }; isTypewriterEnabled = json.optBoolean("typewriter_on", false) } } catch (_: Exception) {} }
-              private fun cleanText(text: String): String = text.replace("\\r", "").trim()
-              private fun stripAnsi(text: String): String = ANSI_REGEX.replace(text, "")
-              private fun scrollToBottom() { chatRecycler.post { val pos = chatAdapter.itemCount - 1; if (pos >= 0) chatRecycler.smoothScrollToPosition(pos) } }
-
-              private fun parseAnsiToSpannable(text: String): CharSequence {
-                  val ssb = SpannableStringBuilder()
-                  var lastIndex = 0
-                  var isBold = false; var isUnderline = false; var currentColor: Int? = null
-
-                  for (match in ANSI_REGEX.findAll(text)) {
-                      val plainText = text.substring(lastIndex, match.range.first)
-                      if (plainText.isNotEmpty()) {
-                          val start = ssb.length; ssb.append(plainText); val end = ssb.length
-                          if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                          if (isUnderline) ssb.setSpan(UnderlineSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                          if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+              private fun loadAllHistory() {
+                  histories.clear()
+                  try {
+                      if (!historyFile.exists()) return
+                      val array = JSONArray(historyFile.readText())
+                      val count = minOf(array.length(), MAX_HISTORY)
+                      for (index in 0 until count) {
+                          val objectJson = array.getJSONObject(index)
+                          val session = ChatSession(
+                              id = null,
+                              preview = objectJson.optString("preview", "新对话")
+                          )
+                          val messages = objectJson.optJSONArray("messages") ?: JSONArray()
+                          for (messageIndex in 0 until messages.length()) {
+                              val messageJson = messages.getJSONObject(messageIndex)
+                              session.messages.add(
+                                  ChatMessage(
+                                      text = messageJson.optString("text", ""),
+                                      isUser = messageJson.optBoolean("is_user", false),
+                                      isError = messageJson.optBoolean("is_error", false),
+                                      isSystem = messageJson.optBoolean("is_system", false),
+                                      imageUri = if (messageJson.isNull("image_uri")) {
+                                          null
+                                      } else {
+                                          messageJson.optString("image_uri").takeIf { it.isNotEmpty() }
+                                      }
+                                  )
+                              )
+                          }
+                          histories.add(session)
                       }
-                      
+                  } catch (_: Exception) {
+                      histories.clear()
+                      runCatching {
+                          historyFile.renameTo(File(historyFile.parentFile, "chat_history_corrupt.json"))
+                      }
+                  }
+              }
+              private fun refreshHistory() {
+                  historyAdapter.updateList(
+                      histories.filter { session -> session.messages.any { it.isUser } }.take(MAX_HISTORY)
+                  )
+              }
+              private fun saveSettings() {
+                  try {
+                      val json = JSONObject().apply {
+                          put("font_size", chatFontSize)
+                          put("tts_on", isTtsEnabled)
+                          put("tts_speed", ttsSpeed.toDouble())
+                          put("tts_pitch", ttsPitch.toDouble())
+                          put("tts_voice", selectedVoiceName ?: "")
+                          put("typewriter_on", isTypewriterEnabled)
+                      }
+                      val temporary = File(settingsFile.parentFile, "${settingsFile.name}.tmp")
+                      temporary.writeText(json.toString())
+                      if (!temporary.renameTo(settingsFile)) {
+                          settingsFile.writeText(json.toString())
+                          temporary.delete()
+                      }
+                  } catch (_: Exception) {
+                  }
+              }
+              private fun loadSettings() {
+                  try {
+                      if (!settingsFile.exists()) return
+                      val json = JSONObject(settingsFile.readText())
+                      chatFontSize = json.optInt("font_size", 14).coerceIn(10, 24)
+                      isTtsEnabled = json.optBoolean("tts_on", false)
+                      ttsSpeed = json.optDouble("tts_speed", 1.0).toFloat().coerceIn(0.5f, 2.0f)
+                      ttsPitch = json.optDouble("tts_pitch", 1.0).toFloat().coerceIn(0.5f, 2.0f)
+                      selectedVoiceName = json.optString("tts_voice", "").takeIf { it.isNotEmpty() }
+                      isTypewriterEnabled = json.optBoolean("typewriter_on", false)
+                  } catch (_: Exception) {
+                  }
+              }
+              private fun cleanText(text: String): String = text.replace("\r", "").trim()
+              private fun stripAnsi(text: String): String = ANSI_REGEX.replace(text, "")
+              private fun scrollToBottom(smooth: Boolean = true) {
+                  pendingSmoothScroll = smooth
+                  chatRecycler.removeCallbacks(scrollRunnable)
+                  chatRecycler.post(scrollRunnable)
+              }
+              private fun isChatNearBottom(): Boolean {
+                  val manager = chatRecycler.layoutManager as? LinearLayoutManager ?: return true
+                  val lastVisible = manager.findLastVisibleItemPosition()
+                  return lastVisible >= chatAdapter.itemCount - 3
+              }
+              private fun speakMessageIfNeeded(message: ChatMessage) {
+                  if (!isTtsEnabled || message.isSystem || !::tts.isInitialized) return
+                  tts.setSpeechRate(ttsSpeed)
+                  tts.setPitch(ttsPitch)
+                  tts.speak(stripAnsi(message.text), TextToSpeech.QUEUE_ADD, null, null)
+              }
+              private fun parseAnsiToSpannable(text: String): CharSequence {
+                  val builder = SpannableStringBuilder()
+                  var lastIndex = 0
+                  var isBold = false
+                  var isUnderline = false
+                  var currentColor: Int? = null
+                  fun appendStyled(segment: String) {
+                      if (segment.isEmpty()) return
+                      val start = builder.length
+                      builder.append(segment)
+                      val end = builder.length
+                      if (isBold) builder.setSpan(
+                          StyleSpan(Typeface.BOLD),
+                          start,
+                          end,
+                          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                      )
+                      if (isUnderline) builder.setSpan(
+                          UnderlineSpan(),
+                          start,
+                          end,
+                          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                      )
+                      currentColor?.let { color ->
+                          builder.setSpan(
+                              ForegroundColorSpan(color),
+                              start,
+                              end,
+                              Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                          )
+                      }
+                  }
+                  for (match in ANSI_REGEX.findAll(text)) {
+                      appendStyled(text.substring(lastIndex, match.range.first))
                       val code = match.value
                       if (code.endsWith("m")) {
                           val inner = code.substring(2, code.length - 1)
-                          if (inner.isEmpty()) { 
-                              isBold = false; isUnderline = false; currentColor = null 
+                          if (inner.isEmpty()) {
+                              isBold = false
+                              isUnderline = false
+                              currentColor = null
                           } else if (inner == "38;5;210") {
-                              currentColor = Color.parseColor("#FF6B6B")
+                              currentColor = COLOR_SOFT_RED
                           } else {
-                              val parts = inner.split(";")
-                              for (part in parts) {
+                              inner.split(';').forEach { part ->
                                   when (part) {
-                                      "0" -> { isBold = false; isUnderline = false; currentColor = null }
+                                      "0" -> {
+                                          isBold = false
+                                          isUnderline = false
+                                          currentColor = null
+                                      }
                                       "1" -> isBold = true
                                       "4" -> isUnderline = true
-                                      "31", "91" -> currentColor = Color.parseColor("#FF3B30")
-                                      "32", "92" -> currentColor = Color.parseColor("#34C759")
-                                      "33", "93" -> currentColor = Color.parseColor("#FFCC00")
-                                      "34", "94" -> currentColor = Color.parseColor("#007AFF")
-                                      "35", "95" -> currentColor = Color.parseColor("#AF52DE")
-                                      "36", "96" -> currentColor = Color.parseColor("#32ADE6")
-                                      "30", "90", "37", "97" -> currentColor = Color.parseColor("#8E8E93")
+                                      "31", "91" -> currentColor = COLOR_RED
+                                      "32", "92" -> currentColor = COLOR_GREEN
+                                      "33", "93" -> currentColor = COLOR_YELLOW
+                                      "34", "94" -> currentColor = COLOR_BLUE
+                                      "35", "95" -> currentColor = COLOR_PURPLE
+                                      "36", "96" -> currentColor = COLOR_CYAN
+                                      "30", "90", "37", "97" -> currentColor = COLOR_GRAY
                                   }
                               }
                           }
                       }
                       lastIndex = match.range.last + 1
                   }
-                  
-                  val rem = text.substring(lastIndex)
-                  if (rem.isNotEmpty()) {
-                      val start = ssb.length; ssb.append(rem)
-                      if (isBold) ssb.setSpan(StyleSpan(Typeface.BOLD), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                      if (isUnderline) ssb.setSpan(UnderlineSpan(), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                      if (currentColor != null) ssb.setSpan(ForegroundColorSpan(currentColor!!), start, ssb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                  }
-                  return ssb
+                  appendStyled(text.substring(lastIndex))
+                  return builder
               }
-
-              inner class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-                  private val messages = mutableListOf<ChatMessage>(); var fontSize: Int = 14
-                  fun addMessage(msg: ChatMessage) { messages.add(msg); notifyItemInserted(messages.size - 1) }
-                  fun setMessages(newMsgs: List<ChatMessage>) { messages.clear(); messages.addAll(newMsgs); notifyDataSetChanged() }
-                  fun clearMessages() { messages.clear(); notifyDataSetChanged() }
-                  override fun getItemViewType(pos: Int): Int { val m = messages[pos]; return when { m.isSystem -> TYPE_SYSTEM; m.isError -> TYPE_ERROR; m.isUser -> TYPE_USER; else -> TYPE_BOT } }
-                  
-                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-                      val container = LinearLayout(parent.context).apply { 
-                          layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                          orientation = LinearLayout.HORIZONTAL; setPadding(0, 16, 0, 16) 
-                          gravity = when(viewType) { TYPE_USER -> Gravity.END; TYPE_SYSTEM -> Gravity.CENTER; else -> Gravity.START }
+              private fun loadThumbnail(uriText: String, targetWidth: Int): Bitmap? {
+                  imageCache.get(uriText)?.let { return it }
+                  val uri = Uri.parse(uriText)
+                  val target = targetWidth.coerceAtLeast(320)
+                  val bitmap = try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          contentResolver.loadThumbnail(uri, Size(target, target), null)
+                      } else {
+                          decodeSampledBitmap(uri, target, target)
                       }
-                      val bubble = LinearLayout(parent.context).apply { 
-                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                              when(viewType) { TYPE_USER -> setMargins(100, 0, 32, 0); TYPE_SYSTEM -> setMargins(48, 0, 48, 0); else -> setMargins(32, 0, 100, 0) }
+                  } catch (_: Exception) {
+                      null
+                  }
+                  if (bitmap != null) imageCache.put(uriText, bitmap)
+                  return bitmap
+              }
+              private fun decodeSampledBitmap(uri: Uri, requiredWidth: Int, requiredHeight: Int): Bitmap? {
+                  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                  contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                      BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor, null, bounds)
+                  } ?: return null
+                  var sampleSize = 1
+                  while (bounds.outWidth / sampleSize > requiredWidth * 2 ||
+                      bounds.outHeight / sampleSize > requiredHeight * 2
+                  ) {
+                      sampleSize *= 2
+                  }
+                  val options = BitmapFactory.Options().apply {
+                      inSampleSize = sampleSize
+                      inPreferredConfig = Bitmap.Config.ARGB_8888
+                  }
+                  return contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                      BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor, null, options)
+                  }
+              }
+              private inner class ChatAdapter : RecyclerView.Adapter<ChatViewHolder>() {
+                  private val messages = mutableListOf<ChatMessage>()
+                  var fontSize: Int = 14
+                  init {
+                      setHasStableIds(true)
+                  }
+                  fun addMessage(message: ChatMessage): Int {
+                      messages.add(message)
+                      val position = messages.lastIndex
+                      notifyItemInserted(position)
+                      return position
+                  }
+                  fun setMessages(newMessages: List<ChatMessage>) {
+                      messages.clear()
+                      messages.addAll(newMessages)
+                      notifyDataSetChanged()
+                  }
+                  fun isSameMessage(position: Int, localId: Long): Boolean =
+                      position in messages.indices && messages[position].localId == localId
+                  override fun getItemId(position: Int): Long = messages[position].localId
+                  override fun getItemViewType(position: Int): Int {
+                      val message = messages[position]
+                      return when {
+                          message.isSystem -> TYPE_SYSTEM
+                          message.isError -> TYPE_ERROR
+                          message.isUser -> TYPE_USER
+                          else -> TYPE_BOT
+                      }
+                  }
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ChatViewHolder {
+                      val container = LinearLayout(parent.context).apply {
+                          layoutParams = ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          orientation = LinearLayout.HORIZONTAL
+                          setPadding(0, 16, 0, 16)
+                          gravity = when (viewType) {
+                              TYPE_USER -> Gravity.END
+                              TYPE_SYSTEM -> Gravity.CENTER
+                              else -> Gravity.START
+                          }
+                      }
+                      val bubble = LinearLayout(parent.context).apply {
+                          layoutParams = LinearLayout.LayoutParams(
+                              ViewGroup.LayoutParams.WRAP_CONTENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          ).apply {
+                              when (viewType) {
+                                  TYPE_USER -> setMargins(100, 0, 32, 0)
+                                  TYPE_SYSTEM -> setMargins(48, 0, 48, 0)
+                                  else -> setMargins(32, 0, 100, 0)
+                              }
                           }
                           orientation = LinearLayout.VERTICAL
-                          background = ContextCompat.getDrawable(parent.context, when(viewType) { TYPE_USER -> R.drawable.bg_bubble_user; TYPE_BOT -> R.drawable.bg_bubble_bot; TYPE_ERROR -> R.drawable.bg_bubble_error; else -> android.R.color.transparent })
+                          background = ContextCompat.getDrawable(
+                              parent.context,
+                              when (viewType) {
+                                  TYPE_USER -> R.drawable.bg_bubble_user
+                                  TYPE_BOT -> R.drawable.bg_bubble_bot
+                                  TYPE_ERROR -> R.drawable.bg_bubble_error
+                                  else -> android.R.color.transparent
+                              }
+                          )
                       }
-                      val img = ImageView(parent.context).apply { 
-                          layoutParams = LinearLayout.LayoutParams((parent.context.resources.displayMetrics.widthPixels * 0.35).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-                          adjustViewBounds = true; visibility = View.GONE; setPadding(16, 16, 16, 16) 
+                      val image = ImageView(parent.context).apply {
+                          layoutParams = LinearLayout.LayoutParams(
+                              (parent.context.resources.displayMetrics.widthPixels * 0.35f).toInt(),
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          adjustViewBounds = true
+                          visibility = View.GONE
+                          setPadding(16, 16, 16, 16)
                       }
-                      val tv = TextView(parent.context).apply { 
-                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                          maxWidth = (parent.context.resources.displayMetrics.widthPixels * 0.75).toInt(); setPadding(42, 28, 42, 28); setLineSpacing(6f, 1f) 
-                          setTextColor(ContextCompat.getColor(parent.context, when(viewType) { TYPE_USER, TYPE_ERROR -> R.color.user_text; TYPE_BOT -> R.color.bot_text; else -> R.color.gray_text }))
+                      val text = TextView(parent.context).apply {
+                          layoutParams = LinearLayout.LayoutParams(
+                              ViewGroup.LayoutParams.WRAP_CONTENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          maxWidth = (parent.context.resources.displayMetrics.widthPixels * 0.75f).toInt()
+                          setPadding(42, 28, 42, 28)
+                          setLineSpacing(6f, 1f)
+                          setTextColor(
+                              ContextCompat.getColor(
+                                  parent.context,
+                                  when (viewType) {
+                                      TYPE_USER, TYPE_ERROR -> R.color.user_text
+                                      TYPE_BOT -> R.color.bot_text
+                                      else -> R.color.gray_text
+                                  }
+                              )
+                          )
                           setTextIsSelectable(true)
                       }
-                      bubble.addView(img); bubble.addView(tv); container.addView(bubble); return object : RecyclerView.ViewHolder(container) {}
+                      bubble.addView(image)
+                      bubble.addView(text)
+                      container.addView(bubble)
+                      return ChatViewHolder(container, image, text)
                   }
-                  
-                  override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int, payloads: MutableList<Any>) {
-                      if (payloads.contains("typing")) {
-                          val msg = messages[pos]
-                          val bubble = (holder.itemView as LinearLayout).getChildAt(0) as LinearLayout
-                          val tv = bubble.getChildAt(1) as TextView
-                          tv.text = msg.displaySpannable ?: if (getItemViewType(pos) == TYPE_BOT) parseAnsiToSpannable(msg.text) else stripAnsi(msg.text)
-                          return
+                  override fun onBindViewHolder(holder: ChatViewHolder, position: Int) {
+                      bindFull(holder, position)
+                  }
+                  override fun onBindViewHolder(
+                      holder: ChatViewHolder,
+                      position: Int,
+                      payloads: MutableList<Any>
+                  ) {
+                      if (payloads.contains(PAYLOAD_TYPING)) {
+                          bindText(holder, messages[position], getItemViewType(position))
+                      } else {
+                          bindFull(holder, position)
                       }
-                      super.onBindViewHolder(holder, pos, payloads)
                   }
-
-                  override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int) {
-                      val msg = messages[pos]; val container = holder.itemView as LinearLayout; val bubble = container.getChildAt(0) as LinearLayout
-                      val img = bubble.getChildAt(0) as ImageView; val tv = bubble.getChildAt(1) as TextView
-                      
-                      if (msg.imageUri != null) { img.visibility = View.VISIBLE; img.setImageURI(android.net.Uri.parse(msg.imageUri)); tv.visibility = if (msg.text.isBlank()) View.GONE else View.VISIBLE } 
-                      else { img.visibility = View.GONE; tv.visibility = View.VISIBLE }
-                      
-                      tv.text = msg.displaySpannable ?: if (getItemViewType(pos) == TYPE_BOT) parseAnsiToSpannable(msg.text) else stripAnsi(msg.text)
-                      tv.textSize = if (getItemViewType(pos) == TYPE_SYSTEM) (fontSize - 2).toFloat() else fontSize.toFloat()
+                  private fun bindFull(holder: ChatViewHolder, position: Int) {
+                      val message = messages[position]
+                      val viewType = getItemViewType(position)
+                      holder.boundMessageId = message.localId
+                      holder.imageJob?.cancel()
+                      holder.imageJob = null
+                      if (message.imageUri != null) {
+                          holder.image.visibility = View.VISIBLE
+                          holder.image.setImageDrawable(null)
+                          holder.text.visibility = if (message.text.isBlank()) View.GONE else View.VISIBLE
+                          val targetWidth = (resources.displayMetrics.widthPixels * 0.35f).toInt()
+                          holder.imageJob = lifecycleScope.launch {
+                              val bitmap = withContext(Dispatchers.IO) {
+                                  loadThumbnail(message.imageUri, targetWidth)
+                              }
+                              if (holder.boundMessageId == message.localId && bitmap != null) {
+                                  holder.image.setImageBitmap(bitmap)
+                              }
+                          }
+                      } else {
+                          holder.image.visibility = View.GONE
+                          holder.image.setImageDrawable(null)
+                          holder.text.visibility = View.VISIBLE
+                      }
+                      bindText(holder, message, viewType)
+                      holder.text.textSize = if (viewType == TYPE_SYSTEM) {
+                          (fontSize - 2).toFloat()
+                      } else {
+                          fontSize.toFloat()
+                      }
                   }
-                  override fun getItemCount() = messages.size
+                  private fun bindText(holder: ChatViewHolder, message: ChatMessage, viewType: Int) {
+                      val display = message.displaySpannable ?: when (viewType) {
+                          TYPE_BOT, TYPE_ERROR, TYPE_SYSTEM -> parseAnsiToSpannable(message.text)
+                          else -> stripAnsi(message.text)
+                      }.also { generated ->
+                          if (viewType != TYPE_USER) message.displaySpannable = generated
+                      }
+                      holder.text.text = display
+                  }
+                  override fun onViewRecycled(holder: ChatViewHolder) {
+                      holder.imageJob?.cancel()
+                      holder.imageJob = null
+                      holder.image.setImageDrawable(null)
+                      holder.boundMessageId = RecyclerView.NO_ID
+                      super.onViewRecycled(holder)
+                  }
+                  override fun getItemCount(): Int = messages.size
               }
-
-              inner class HistoryAdapter : RecyclerView.Adapter<HistoryAdapter.VH>() {
-                  private var items = listOf<ChatSession>()
-                  var onItemClick: ((ChatSession) -> Unit)? = null; var onItemLongClick: ((ChatSession) -> Unit)? = null
-                  fun updateList(list: List<ChatSession>) { items = list; notifyDataSetChanged() }
-                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-                      val tv = TextView(parent.context); tv.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                      tv.setPadding(48, 38, 48, 38); tv.textSize = 15f; tv.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black)); tv.setMaxWidth(parent.width - 96); tv.maxLines = 1; tv.setEllipsize(android.text.TextUtils.TruncateAt.END)
-                      return VH(tv)
+              private class ChatViewHolder(
+                  itemView: View,
+                  val image: ImageView,
+                  val text: TextView
+              ) : RecyclerView.ViewHolder(itemView) {
+                  var boundMessageId: Long = RecyclerView.NO_ID
+                  var imageJob: Job? = null
+              }
+              private inner class HistoryAdapter : RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
+                  private var items = emptyList<ChatSession>()
+                  var onItemClick: ((ChatSession) -> Unit)? = null
+                  var onItemLongClick: ((ChatSession) -> Unit)? = null
+                  fun updateList(newItems: List<ChatSession>) {
+                      items = newItems.toList()
+                      notifyDataSetChanged()
                   }
-                  override fun onBindViewHolder(holder: VH, pos: Int) { (holder.itemView as TextView).text = items[pos].preview }
-                  override fun getItemCount() = items.size
-                  inner class VH(itemView: View) : RecyclerView.ViewHolder(itemView) { init { itemView.setOnClickListener { val pos = bindingAdapterPosition; if (pos != RecyclerView.NO_POSITION) onItemClick?.invoke(items[pos]) }; itemView.setOnLongClickListener { val pos = bindingAdapterPosition; if (pos != RecyclerView.NO_POSITION) onItemLongClick?.invoke(items[pos]); true } } }
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+                      val textView = TextView(parent.context).apply {
+                          layoutParams = ViewGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.WRAP_CONTENT
+                          )
+                          setPadding(48, 38, 48, 38)
+                          textSize = 15f
+                          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                          maxLines = 1
+                          ellipsize = android.text.TextUtils.TruncateAt.END
+                      }
+                      return ViewHolder(textView)
+                  }
+                  override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+                      (holder.itemView as TextView).text = items[position].preview
+                  }
+                  override fun getItemCount(): Int = items.size
+                  inner class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+                      init {
+                          itemView.setOnClickListener {
+                              val position = bindingAdapterPosition
+                              if (position != RecyclerView.NO_POSITION) onItemClick?.invoke(items[position])
+                          }
+                          itemView.setOnLongClickListener {
+                              val position = bindingAdapterPosition
+                              if (position != RecyclerView.NO_POSITION) onItemLongClick?.invoke(items[position])
+                              true
+                          }
+                      }
+                  }
               }
           }
           KT_EOF
-
+      - name: Validate generated sources
+        run: |
+          set -euo pipefail
+          python3 -m py_compile app/src/main/python/bootstrap.py
+          test -s app/src/main/java/com/lear/chatbot/MainActivity.kt
+          test -s app/src/main/assets/chatbot/lear_main.py
       - name: Build APK
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          set -eo pipefail
-          gradle assembleDebug --no-daemon --stacktrace --console=plain > build_log.txt 2>&1 || {
-            echo "BUILD FAILED!"; tail -n 50 build_log.txt; exit 1
-          }
-
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build_log.txt
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 李尔构建错误日志
+          path: build_log.txt
+          retention-days: 7
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
