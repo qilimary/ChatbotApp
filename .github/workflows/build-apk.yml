@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CHATBOT_DOWNLOAD_URL: https://drive.google.com/file/d/1qM69EEecMGTEyV2e51XuflO_Qtcx9MsN/view?usp=drivesdk
+  CHATBOT_DOWNLOAD_URL: https://drive.google.com/file/d/1azboldNeSQP3SfHi08FrOvkTBHxFGKWu/view?usp=drivesdk
 
 jobs:
   build:
@@ -242,6 +242,7 @@ jobs:
           import threading
           import traceback
           _lear_main = None
+          _shared_similarity_calculator = None
           _bridge_lock = threading.RLock()
           _call_count = 0
           def _json(value):
@@ -311,9 +312,55 @@ jobs:
                   queue.clear()
               else:
                   _lear_main.global_async_queue = []
+          def _find_ready_similarity_calculator():
+              manager = getattr(_lear_main, "WEB_SESSION_MANAGER", None)
+              sessions = getattr(manager, "sessions", None)
+              if not isinstance(sessions, dict):
+                  return None
+              for session in list(sessions.values()):
+                  engine = getattr(session, "engine", None)
+                  chatbot = getattr(engine, "chatbot", None)
+                  calculator = getattr(chatbot, "similarity_calculator", None)
+                  ready_event = getattr(calculator, "_index_ready_event", None)
+                  if (
+                      calculator is not None
+                      and ready_event is not None
+                      and ready_event.is_set()
+                      and getattr(calculator, "inverted_index", None) is not None
+                  ):
+                      return calculator
+              return None
           def _start_new_session_locked():
-              _clear_runtime_state()
-              result = _lear_main.web_start_session()
+              global _shared_similarity_calculator
+              ready_calculator = (
+                  _find_ready_similarity_calculator()
+                  or _shared_similarity_calculator
+              )
+              original_calculator_class = None
+              if ready_calculator is not None:
+                  _shared_similarity_calculator = ready_calculator
+                  # 新会话需要全新的对话状态，但检索索引和语义向量是只读资源。
+                  # 构造新机器人时临时复用已载入内存的计算器，避免再次读取
+                  # 约 478 MB 缓存；构造结束后立即恢复原类，不改变后续逻辑。
+                  original_calculator_class = getattr(
+                      _lear_main,
+                      "SimilarityCalculator",
+                      None
+                  )
+                  if original_calculator_class is not None:
+                      _lear_main.SimilarityCalculator = (
+                          lambda *args, **kwargs: ready_calculator
+                      )
+                  try:
+                      ready_calculator.mode = "平衡"
+                  except Exception:
+                      pass
+              try:
+                  _clear_runtime_state()
+                  result = _lear_main.web_start_session()
+              finally:
+                  if original_calculator_class is not None:
+                      _lear_main.SimilarityCalculator = original_calculator_class
               _maybe_collect(force=True)
               return _style_result(result)
           def init_backend(files_dir):
@@ -330,6 +377,7 @@ jobs:
               except Exception as error:
                   return _json({"error": str(error), "traceback": traceback.format_exc()})
           def initialization_status(session_id=None):
+              global _shared_similarity_calculator
               if _lear_main is None:
                   return _json({"ready": False, "successful": False})
               try:
@@ -356,6 +404,8 @@ jobs:
                       successful = bool(
                           ready and getattr(calculator, "inverted_index", None) is not None
                       )
+                      if successful:
+                          _shared_similarity_calculator = calculator
                       return _json({"ready": ready, "successful": successful})
               except Exception as error:
                   return _json({
@@ -2492,6 +2542,7 @@ jobs:
           done
           test "$(find app/src/main/assets/chatbot -maxdepth 1 -type f | wc -l)" -eq 6
           grep -q '^def initialization_status' app/src/main/python/bootstrap.py
+          grep -q '^_shared_similarity_calculator = None' app/src/main/python/bootstrap.py
           grep -q 'INITIALIZATION_NOTICE' app/src/main/java/com/lear/chatbot/MainActivity.kt
           test "$(wc -c < app/src/main/assets/chatbot/bundle_version.txt)" -eq 65
           grep -Eq '^[0-9a-f]{64}$' app/src/main/assets/chatbot/bundle_version.txt
