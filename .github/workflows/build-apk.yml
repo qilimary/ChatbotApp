@@ -64,15 +64,10 @@ jobs:
               break
             fi
           done
-          if [ -z "$CHATBOT_FILE" ]; then
+          if [ -z "$CHATBOT_FILE" ] && [ ! -s 'LiEr_fixed.py' ]; then
             echo '未在压缩包中找到 LiEr_fixed.py 或 李尔.py' >&2
             exit 1
           fi
-          CHATBOT_DIR="$(dirname "$CHATBOT_FILE")"
-          find "$CHATBOT_DIR" -maxdepth 1 -type f \
-            \( -name '*.py' -o -name '*.json' -o -name '*.pkl' \) \
-            ! -name 'LiEr_fixed.py' \
-            -exec cp -f {} . \;
           if [ -s 'LiEr_fixed.py' ]; then
             echo '使用仓库根目录中的 LiEr_fixed.py'
             cp -f 'LiEr_fixed.py' '李尔.py'
@@ -81,9 +76,17 @@ jobs:
           fi
           rm -f 'LiEr_fixed.py'
           for required_file in \
+            '单词.py' '成语.py' '数据.py' '字向量_f16_pure.json'; do
+            source_file="$(find chatbot_extract -type f -name "$required_file" -print -quit)"
+            if [ -z "$source_file" ] || [ ! -s "$source_file" ]; then
+              echo "聊天包缺少必要文件：$required_file" >&2
+              exit 1
+            fi
+            cp -f "$source_file" "$required_file"
+          done
+          for required_file in \
             '李尔.py' '单词.py' '成语.py' '数据.py' \
-            '字向量_f16_pure.json' 'inverted_index_bm25.pkl' \
-            'index_meta_bm25.json' 'corpus_vectors_cache.pkl'; do
+            '字向量_f16_pure.json'; do
             if [ ! -s "$required_file" ]; then
               echo "聊天包缺少必要文件：$required_file" >&2
               exit 1
@@ -205,9 +208,12 @@ jobs:
           mkdir -p app/src/main/java/com/lear/chatbot
           mkdir -p app/src/main/res/{layout,values,drawable,mipmap-anydpi}
           mkdir -p app/src/main/assets/chatbot app/src/main/python
-          find . -maxdepth 1 -type f \
-            \( -name '*.py' -o -name '*.json' -o -name '*.pkl' \) \
-            -exec cp -f {} app/src/main/assets/chatbot/ \;
+          for asset_file in \
+            lear_main.py chatbot_words.py chatbot_idioms.py \
+            chatbot_data.py word_vectors.json; do
+            test -s "$asset_file"
+            cp -f "$asset_file" app/src/main/assets/chatbot/
+          done
           python3 - <<'PYEOF'
           import hashlib
           from pathlib import Path
@@ -323,6 +329,40 @@ jobs:
                       return _json(_start_new_session_locked())
               except Exception as error:
                   return _json({"error": str(error), "traceback": traceback.format_exc()})
+          def initialization_status(session_id=None):
+              if _lear_main is None:
+                  return _json({"ready": False, "successful": False})
+              try:
+                  with _bridge_lock:
+                      manager = getattr(_lear_main, "WEB_SESSION_MANAGER", None)
+                      sessions = getattr(manager, "sessions", None)
+                      manager_lock = getattr(manager, "lock", None)
+                      if not isinstance(sessions, dict):
+                          return _json({"ready": False, "successful": False})
+                      if manager_lock is not None:
+                          manager_lock.acquire()
+                      try:
+                          session = sessions.get(str(session_id)) if session_id else None
+                          if session is None and len(sessions) == 1:
+                              session = next(iter(sessions.values()))
+                      finally:
+                          if manager_lock is not None:
+                              manager_lock.release()
+                      engine = getattr(session, "engine", None)
+                      chatbot = getattr(engine, "chatbot", None)
+                      calculator = getattr(chatbot, "similarity_calculator", None)
+                      ready_event = getattr(calculator, "_index_ready_event", None)
+                      ready = bool(ready_event is not None and ready_event.is_set())
+                      successful = bool(
+                          ready and getattr(calculator, "inverted_index", None) is not None
+                      )
+                      return _json({"ready": ready, "successful": successful})
+              except Exception as error:
+                  return _json({
+                      "ready": True,
+                      "successful": False,
+                      "error": str(error)
+                  })
           def start_new_session():
               if _lear_main is None:
                   return _json({"error": "系统仍在初始化中，请稍后。", "traceback": ""})
@@ -606,6 +646,7 @@ jobs:
           import java.util.concurrent.Executors
           import java.util.concurrent.atomic.AtomicLong
           import kotlin.math.max
+          import kotlin.random.Random
           private val 消息编号生成器 = AtomicLong(1L)
           private val 会话编号生成器 = AtomicLong(1L)
           private class ChatMessage(
@@ -648,6 +689,11 @@ jobs:
               val error: String? = null,
               val traceback: String? = null
           )
+          private data class InitializationStatus(
+              val ready: Boolean,
+              val successful: Boolean,
+              val error: String? = null
+          )
           class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
               companion object {
                   private const val TYPE_USER = 0
@@ -658,6 +704,19 @@ jobs:
                   private const val MAX_MESSAGES = 300
                   private const val BUNDLE_VERSION_ASSET = "chatbot/bundle_version.txt"
                   private const val PAYLOAD_TYPING = "typing"
+                  private const val INITIALIZATION_NOTICE =
+                      "正在初始化中，这可能需要一分钟的时间……"
+                  private const val INITIALIZATION_TIMEOUT_MS = 180_000L
+                  private val CACHE_FILE_NAMES = arrayOf(
+                      "inverted_index_bm25.pkl",
+                      "index_meta_bm25.json",
+                      "corpus_vectors_cache.pkl"
+                  )
+                  private val PRESERVED_USER_FILE_NAMES = arrayOf(
+                      "user_data.json",
+                      "bot_knowledge.json",
+                      "knowledge.json"
+                  )
                   private val ANSI_REGEX = Regex("\u001B\\[[0-9;]*[a-zA-Z]")
                   private val ANSI_BASE_COLORS = intArrayOf(
                       Color.rgb(0, 0, 0),
@@ -711,6 +770,7 @@ jobs:
               private var currentSession = ChatSession()
               private var isProcessing = false
               private var isSessionStarting = false
+              private var isBackendReady = false
               private var busyOperations = 0
               private var sessionGeneration = 0L
               private var chatFontSize = 14
@@ -809,6 +869,21 @@ jobs:
                       .setNeutralButton("一键复制错误") { _, _ -> copyToClipboard("崩溃日志", log) }
                       .show()
               }
+              private fun voicePreferenceScore(voice: android.speech.tts.Voice): Int {
+                  val offlineBonus = if (voice.isNetworkConnectionRequired) 0 else 10_000
+                  val mainlandChineseBonus =
+                      if (voice.locale.language == "zh" && voice.locale.country == "CN") 500 else 0
+                  return offlineBonus + mainlandChineseBonus + voice.quality * 10 - voice.latency
+              }
+              private fun voiceDisplayName(voice: android.speech.tts.Voice): String {
+                  val quality = when {
+                      voice.quality >= 400 -> "高质量"
+                      voice.quality >= 300 -> "标准"
+                      else -> "基础"
+                  }
+                  val connection = if (voice.isNetworkConnectionRequired) "联网" else "离线"
+                  return "${voice.name}（$quality · $connection）"
+              }
               override fun onInit(status: Int) {
                   if (status != TextToSpeech.SUCCESS) return
                   val result = tts.setLanguage(Locale.CHINESE)
@@ -817,11 +892,19 @@ jobs:
                       ?.asSequence()
                       ?.filter { it.locale.language == "zh" }
                       ?.distinctBy { it.name }
-                      ?.sortedBy { it.name }
+                      ?.sortedWith(
+                          compareByDescending<android.speech.tts.Voice> {
+                              voicePreferenceScore(it)
+                          }.thenBy { it.name }
+                      )
                       ?.toList()
                       ?: emptyList()
-                  selectedVoiceName?.let { name ->
-                      availableVoices.firstOrNull { it.name == name }?.let { tts.voice = it }
+                  val selectedVoice = selectedVoiceName
+                      ?.let { name -> availableVoices.firstOrNull { it.name == name } }
+                      ?: availableVoices.firstOrNull()
+                  selectedVoice?.let { voice ->
+                      tts.voice = voice
+                      selectedVoiceName = voice.name
                   }
               }
               override fun onStop() {
@@ -943,6 +1026,12 @@ jobs:
                               }
                           }
                       }
+                      for (fileName in PRESERVED_USER_FILE_NAMES) {
+                          val existingFile = File(destination, fileName)
+                          if (existingFile.isFile && existingFile.length() > 0L) {
+                              existingFile.copyTo(File(staging, fileName), overwrite = true)
+                          }
+                      }
                       File(staging, ".asset_version").writeText(bundledVersion)
                       backup.deleteRecursively()
                       if (destination.exists()) {
@@ -956,22 +1045,49 @@ jobs:
                   }
                   destination.absolutePath
               }
+              private fun cacheInitializationRequired(filesPath: String): Boolean =
+                  CACHE_FILE_NAMES.any { fileName ->
+                      val cacheFile = File(filesPath, fileName)
+                      !cacheFile.isFile || cacheFile.length() <= 0L
+                  }
               private fun initPython() {
                   beginBusyOperation()
                   isSessionStarting = true
+                  isBackendReady = false
                   btnMenu.isEnabled = false
+                  btnNewSession.isEnabled = false
                   drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
                   updateComposerState("正在加载...")
                   val targetSession = currentSession
                   val generation = sessionGeneration
                   lifecycleScope.launch {
+                      var initializationNotice: ChatMessage? = null
+                      var initializationCompleted = false
                       try {
                           val filesPath = extractAssetsToDisk()
-                          val result = withContext(pythonDispatcher) {
+                          if (cacheInitializationRequired(filesPath)) {
+                              initializationNotice = ChatMessage(
+                                  INITIALIZATION_NOTICE,
+                                  isUser = false,
+                                  isSystem = true
+                              ).also { notice ->
+                                  targetSession.messages.add(notice)
+                                  if (targetSession === currentSession &&
+                                      generation == sessionGeneration
+                                  ) {
+                                      chatAdapter.addMessage(notice)
+                                      scrollToBottom(smooth = false)
+                                      updateComposerState(INITIALIZATION_NOTICE)
+                                  }
+                              }
+                          }
+                          val (loadedModule, result) = withContext(pythonDispatcher) {
                               if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
                               val module = Python.getInstance().getModule("bootstrap")
                               bootstrapModule = module
-                              parseSessionStartResult(module.callAttr("init_backend", filesPath).toString())
+                              module to parseSessionStartResult(
+                                  module.callAttr("init_backend", filesPath).toString()
+                              )
                           }
                           if (targetSession !== currentSession || generation != sessionGeneration) return@launch
                           if (result.error != null) {
@@ -984,6 +1100,20 @@ jobs:
                               appendInitialMessages(targetSession, result.messages)
                               chatAdapter.setMessages(targetSession.messages)
                               scrollToBottom(smooth = false)
+                              val initialization = awaitBackendInitialization(
+                                  loadedModule,
+                                  result.sessionId,
+                                  targetSession,
+                                  generation
+                              )
+                              if (!initialization.ready || !initialization.successful) {
+                                  error(
+                                      initialization.error
+                                          ?: "本地索引或语义缓存初始化失败"
+                                  )
+                              }
+                              initializationCompleted = true
+                              isBackendReady = true
                               inputMessage.hint = "输入消息..."
                               startPolling()
                           }
@@ -993,8 +1123,25 @@ jobs:
                               showErrorDialog("底层环境异常", error.stackTraceToString())
                           }
                       } finally {
+                          initializationNotice?.let { notice ->
+                              targetSession.messages.remove(notice)
+                              if (targetSession === currentSession &&
+                                  generation == sessionGeneration
+                              ) {
+                                  chatAdapter.setMessages(targetSession.messages)
+                                  scrollToBottom(smooth = false)
+                                  if (initializationCompleted) {
+                                      Toast.makeText(
+                                          this@MainActivity,
+                                          "初始化完成",
+                                          Toast.LENGTH_SHORT
+                                      ).show()
+                                  }
+                              }
+                          }
                           endBusyOperation()
                           btnMenu.isEnabled = true
+                          btnNewSession.isEnabled = true
                           drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
                           if (targetSession === currentSession && generation == sessionGeneration) {
                               isSessionStarting = false
@@ -1002,6 +1149,39 @@ jobs:
                           }
                       }
                   }
+              }
+              private suspend fun awaitBackendInitialization(
+                  module: PyObject,
+                  sessionId: String?,
+                  targetSession: ChatSession,
+                  generation: Long
+              ): InitializationStatus {
+                  val deadline = SystemClock.uptimeMillis() + INITIALIZATION_TIMEOUT_MS
+                  var latest = InitializationStatus(ready = false, successful = false)
+                  while (SystemClock.uptimeMillis() < deadline) {
+                      if (targetSession !== currentSession || generation != sessionGeneration) {
+                          throw CancellationException("会话已切换")
+                      }
+                      latest = withContext(pythonDispatcher) {
+                          parseInitializationStatus(
+                              module.callAttr(
+                                  "initialization_status",
+                                  sessionId ?: ""
+                              ).toString()
+                          )
+                      }
+                      if (latest.ready) return latest
+                      delay(500L)
+                  }
+                  return latest.copy(error = latest.error ?: "初始化等待超过三分钟")
+              }
+              private fun parseInitializationStatus(jsonText: String): InitializationStatus {
+                  val json = JSONObject(jsonText)
+                  return InitializationStatus(
+                      ready = json.optBoolean("ready", false),
+                      successful = json.optBoolean("successful", false),
+                      error = json.optString("error", "").takeIf { it.isNotBlank() }
+                  )
               }
               private fun parseSessionStartResult(jsonText: String): SessionStartResult {
                   val json = JSONObject(jsonText)
@@ -1120,35 +1300,60 @@ jobs:
                   adapterPosition: Int
               ) {
                   val fullSpan = parseAnsiToSpannable(fullText)
-                  val length = fullSpan.length
-                  if (length == 0) {
+                  if (fullSpan.isEmpty()) {
                       botMessage.displaySpannable = fullSpan
                       return
                   }
-                  var currentDelay = 35f
-                  val minDelay = 2f
-                  val acceleration = (35f - minDelay) / length
+                  // Python 按 Unicode 字符推进；这里也按码点边界截取，
+                  // 避免把 emoji 的代理对拆成两个残缺字符。
+                  val endOffsets = ArrayList<Int>(fullSpan.length)
+                  var nextOffset = 0
+                  while (nextOffset < fullSpan.length) {
+                      val codePoint = Character.codePointAt(fullSpan, nextOffset)
+                      nextOffset += Character.charCount(codePoint)
+                      endOffsets.add(nextOffset)
+                  }
+                  val symbolCount = endOffsets.size
+                  var currentMinDelay = 21.5
+                  var currentMaxDelay = 33.0
+                  var punctuationProbability = 0.002
+                  val accelerationStep = 0.4
+                  val minimumDelay = 0.1
+                  val lengthInfluence = 0.01
                   var lastUiUpdate = 0L
                   var lastScroll = 0L
-                  for (index in 1..length) {
+                  for ((stepIndex, endOffset) in endOffsets.withIndex()) {
                       if (targetSession !== currentSession || generation != sessionGeneration) {
                           botMessage.displaySpannable = fullSpan
                           return
                       }
-                      currentDelay = max(minDelay, currentDelay - acceleration)
-                      val character = fullSpan[index - 1]
-                      var pause = currentDelay.toLong()
-                      pause += when (character) {
-                          '。', '！', '？', '\n' -> 150L
-                          '，', '、' -> 80L
-                          else -> 0L
+                      val codePoint = Character.codePointBefore(fullSpan, endOffset)
+                      val punctuation =
+                          codePoint == '。'.code || codePoint == '！'.code ||
+                              codePoint == '？'.code || codePoint == '，'.code ||
+                              codePoint == '、'.code || codePoint == '\n'.code
+                      val baseDelay = if (currentMaxDelay > currentMinDelay) {
+                          Random.nextDouble(currentMinDelay, currentMaxDelay)
+                      } else {
+                          currentMinDelay
+                      }
+                      var pause = max(1L, baseDelay.toLong())
+                      if (Random.nextDouble() < 0.0001) {
+                          pause += 400L
+                      }
+                      if (punctuation && Random.nextDouble() < punctuationProbability) {
+                          val ratio = (
+                              (punctuationProbability - 0.0005) / (0.002 - 0.0005)
+                          ).coerceIn(0.0, 1.0)
+                          pause += (400.0 + 150.0 * ratio).toLong()
                       }
                       delay(pause)
                       val now = SystemClock.uptimeMillis()
-                      val punctuation = character == '。' || character == '！' || character == '？' ||
-                          character == '，' || character == '、' || character == '\n'
-                      if (index == length || punctuation || now - lastUiUpdate >= 16L) {
-                          botMessage.displaySpannable = fullSpan.subSequence(0, index)
+                      if (
+                          stepIndex == symbolCount - 1 || punctuation ||
+                          now - lastUiUpdate >= 16L
+                      ) {
+                          botMessage.displaySpannable = fullSpan.subSequence(0, endOffset)
                           if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
                               chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
                               if (now - lastScroll >= 80L && isChatNearBottom()) {
@@ -1158,6 +1363,21 @@ jobs:
                           }
                           lastUiUpdate = now
                       }
+                      val progress =
+                          stepIndex.toDouble() / max(1, symbolCount).toDouble()
+                      val lengthAdjustment = 1.0 - progress * lengthInfluence
+                      currentMinDelay = max(
+                          minimumDelay,
+                          (currentMinDelay - accelerationStep) * lengthAdjustment
+                      )
+                      currentMaxDelay = max(
+                          minimumDelay,
+                          (currentMaxDelay - accelerationStep) * lengthAdjustment
+                      )
+                      punctuationProbability = max(
+                          0.0005,
+                          punctuationProbability - 0.0001
+                      )
                   }
                   botMessage.displaySpannable = fullSpan
                   if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
@@ -1336,6 +1556,7 @@ jobs:
                   }
                   beginBusyOperation()
                   isSessionStarting = true
+                  isBackendReady = false
                   updateComposerState("正在加载...")
                   sessionStartJob = lifecycleScope.launch {
                       try {
@@ -1351,9 +1572,22 @@ jobs:
                           } else {
                               newSession.id = result.sessionId
                               appendInitialMessages(newSession, result.messages)
-                              newSession.messages.forEach { speakMessageIfNeeded(it) }
                               chatAdapter.setMessages(newSession.messages)
                               scrollToBottom(smooth = false)
+                              val initialization = awaitBackendInitialization(
+                                  module,
+                                  result.sessionId,
+                                  newSession,
+                                  generation
+                              )
+                              if (!initialization.ready || !initialization.successful) {
+                                  error(
+                                      initialization.error
+                                          ?: "本地索引或语义缓存加载失败"
+                                  )
+                              }
+                              isBackendReady = true
+                              newSession.messages.forEach { speakMessageIfNeeded(it) }
                               inputMessage.hint = "输入消息..."
                           }
                       } catch (error: Throwable) {
@@ -1402,6 +1636,7 @@ jobs:
                   // 避免把上次运行留下的失效 session_id 继续传给后端。
                   beginBusyOperation()
                   isSessionStarting = true
+                  isBackendReady = false
                   updateComposerState("正在加载...")
                   sessionStartJob = lifecycleScope.launch {
                       try {
@@ -1416,6 +1651,19 @@ jobs:
                               )
                           } else {
                               session.id = result.sessionId
+                              val initialization = awaitBackendInitialization(
+                                  module,
+                                  result.sessionId,
+                                  session,
+                                  generation
+                              )
+                              if (!initialization.ready || !initialization.successful) {
+                                  error(
+                                      initialization.error
+                                          ?: "本地索引或语义缓存加载失败"
+                                  )
+                              }
+                              isBackendReady = true
                           }
                       } catch (error: Throwable) {
                           if (error !is CancellationException &&
@@ -1484,12 +1732,15 @@ jobs:
                       messageLimitReached -> "您已到达最大对话限制（300条）"
                       hardLocked -> "对话已彻底锁定"
                       endSystemIndex >= 0 -> "对话已结束(还可发送最后一条)"
-                      isSessionStarting || bootstrapModule == null -> "正在加载..."
+                      isSessionStarting || !isBackendReady -> "正在加载..."
                       else -> "输入消息..."
                   }
-                  val backendReady = bootstrapModule != null && !isSessionStarting && !isProcessing
+                  val backendReady =
+                      bootstrapModule != null && isBackendReady &&
+                          !isSessionStarting && !isProcessing
                   btnSend.isEnabled = canUseInput && backendReady && inputMessage.text.isNotBlank()
-                  btnImage.isEnabled = !isOcrProcessing
+                  btnImage.isEnabled = backendReady && !isOcrProcessing
+                  btnNewSession.isEnabled = backendReady
               }
               private fun beginBusyOperation() {
                   busyOperations += 1
@@ -1578,8 +1829,14 @@ jobs:
                       setPadding(0, 0, 0, 32)
                       textSize = 16f
                   }
+                  val voiceNote = TextView(this).apply {
+                      text = "默认优先选择高质量离线中文音色；联网音色可能更自然，但会受网络影响。"
+                      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                      textSize = 13f
+                      setPadding(0, 0, 0, 16)
+                  }
                   val btnVoice = MaterialButton(this).apply {
-                      text = "选择本地音色 (${availableVoices.size}种)"
+                      text = "选择音色 (${availableVoices.size}种)"
                       setPadding(0, 0, 0, 16)
                   }
                   btnVoice.setOnClickListener {
@@ -1587,15 +1844,16 @@ jobs:
                           Toast.makeText(this, "手机未安装中文语音包", Toast.LENGTH_SHORT).show()
                           return@setOnClickListener
                       }
-                      val names = availableVoices.map { it.name }.toTypedArray()
+                      val labels = availableVoices.map(::voiceDisplayName).toTypedArray()
                       val currentIndex = availableVoices
                           .indexOfFirst { it.name == selectedVoiceName }
                           .takeIf { it >= 0 }
                           ?: 0
                       AlertDialog.Builder(this)
-                          .setSingleChoiceItems(names, currentIndex) { _, which ->
-                              selectedVoiceName = names[which]
-                              tts.voice = availableVoices[which]
+                          .setSingleChoiceItems(labels, currentIndex) { _, which ->
+                              val voice = availableVoices[which]
+                              selectedVoiceName = voice.name
+                              tts.voice = voice
                               saveSettings()
                           }
                           .setPositiveButton("确定", null)
@@ -1650,6 +1908,7 @@ jobs:
                       }
                   }
                   container.addView(switchTts)
+                  container.addView(voiceNote)
                   container.addView(btnVoice)
                   container.addView(speedLabel)
                   container.addView(speedSlider)
@@ -1824,6 +2083,36 @@ jobs:
               }
               private fun cleanText(text: String): String = text.replace("\r", "").trim()
               private fun stripAnsi(text: String): String = ANSI_REGEX.replace(text, "")
+              private fun isEmojiCodePoint(codePoint: Int): Boolean = when (codePoint) {
+                  0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139,
+                  0x3030, 0x303D, 0x3297, 0x3299 -> true
+                  in 0x200D..0x200D,
+                  in 0x20E3..0x20E3,
+                  in 0x2300..0x23FF,
+                  in 0x2500..0x27FF,
+                  in 0x2B00..0x2BFF,
+                  in 0xFE00..0xFE0F,
+                  in 0x1F000..0x1FAFF,
+                  in 0xE0020..0xE007F -> true
+                  else -> false
+              }
+              private fun textForSpeech(text: String): String {
+                  val plainText = stripAnsi(text)
+                      .replace(Regex("[#*0-9]\\uFE0F?\\u20E3"), "")
+                  val spokenText = StringBuilder(plainText.length)
+                  var index = 0
+                  while (index < plainText.length) {
+                      val codePoint = Character.codePointAt(plainText, index)
+                      if (!isEmojiCodePoint(codePoint)) {
+                          spokenText.appendCodePoint(codePoint)
+                      }
+                      index += Character.charCount(codePoint)
+                  }
+                  return spokenText.toString()
+                      .replace(Regex("[\\t ]{2,}"), " ")
+                      .replace(Regex(" *\\n *"), "\n")
+                      .trim()
+              }
               private fun scrollToBottom(smooth: Boolean = true) {
                   pendingSmoothScroll = smooth
                   chatRecycler.removeCallbacks(scrollRunnable)
@@ -1836,9 +2125,11 @@ jobs:
               }
               private fun speakMessageIfNeeded(message: ChatMessage) {
                   if (!isTtsEnabled || message.isSystem || !::tts.isInitialized) return
+                  val spokenText = textForSpeech(message.text)
+                  if (spokenText.isBlank()) return
                   tts.setSpeechRate(ttsSpeed)
                   tts.setPitch(ttsPitch)
-                  tts.speak(stripAnsi(message.text), TextToSpeech.QUEUE_ADD, null, null)
+                  tts.speak(spokenText, TextToSpeech.QUEUE_ADD, null, null)
               }
               private fun parseAnsiToSpannable(text: String): CharSequence {
                   val builder = SpannableStringBuilder()
@@ -2189,7 +2480,19 @@ jobs:
           PYTHONPYCACHEPREFIX="$PYCACHE_ROOT" \
             python3 -m py_compile app/src/main/assets/chatbot/*.py
           test -s app/src/main/java/com/lear/chatbot/MainActivity.kt
-          test -s app/src/main/assets/chatbot/lear_main.py
+          for required_asset in \
+            lear_main.py chatbot_words.py chatbot_idioms.py \
+            chatbot_data.py word_vectors.json bundle_version.txt; do
+            test -s "app/src/main/assets/chatbot/$required_asset"
+          done
+          for generated_cache in \
+            inverted_index_bm25.pkl index_meta_bm25.json \
+            corpus_vectors_cache.pkl; do
+            test ! -e "app/src/main/assets/chatbot/$generated_cache"
+          done
+          test "$(find app/src/main/assets/chatbot -maxdepth 1 -type f | wc -l)" -eq 6
+          grep -q '^def initialization_status' app/src/main/python/bootstrap.py
+          grep -q 'INITIALIZATION_NOTICE' app/src/main/java/com/lear/chatbot/MainActivity.kt
           test "$(wc -c < app/src/main/assets/chatbot/bundle_version.txt)" -eq 65
           grep -Eq '^[0-9a-f]{64}$' app/src/main/assets/chatbot/bundle_version.txt
       - name: Build APK
