@@ -511,6 +511,12 @@ jobs:
         _lear_main = None
         _shared_similarity_calculator = None
         _bridge_lock = threading.RLock()
+        _custom_qa_path = None
+        _custom_qa = {}
+        _custom_vectors = {}
+        _MAX_CUSTOM_QA = 500
+        _MAX_CUSTOM_QUESTION = 200
+        _MAX_CUSTOM_ANSWER = 2000
 
         def _json(value):
             return json.dumps(value, ensure_ascii=False, default=str)
@@ -524,6 +530,343 @@ jobs:
 
         def _calculator(session):
             return getattr(getattr(getattr(session, 'engine', None), 'chatbot', None), 'similarity_calculator', None)
+
+
+        def _clean_custom_value(value, limit, field):
+            if not isinstance(value, str):
+                raise ValueError(f'{field}必须是文本。')
+            value = value.replace('\r', '').strip()
+            if not value:
+                raise ValueError(f'{field}不能为空。')
+            if len(value) > limit:
+                raise ValueError(f'{field}不能超过{limit}个字符。')
+            return value
+
+        def _load_custom_qa(files_dir):
+            global _custom_qa_path
+            _custom_qa_path = os.path.join(os.path.dirname(files_dir), 'custom_qa.json')
+            _custom_qa.clear()
+            _custom_vectors.clear()
+            if not os.path.isfile(_custom_qa_path):
+                return
+            try:
+                with open(_custom_qa_path, 'r', encoding='utf-8') as f:
+                    payload = json.load(f)
+                if isinstance(payload, dict):
+                    payload = [
+                        {'question': question, 'answer': answer}
+                        for question, answer in payload.items()
+                    ]
+                if not isinstance(payload, list):
+                    return
+                for item in payload[:_MAX_CUSTOM_QA]:
+                    if not isinstance(item, dict):
+                        continue
+                    question = item.get('question')
+                    answer = item.get('answer')
+                    if not isinstance(question, str) or not isinstance(answer, str):
+                        continue
+                    question = question.replace('\r', '').strip()
+                    answer = answer.replace('\r', '').strip()
+                    if (
+                        question and answer
+                        and len(question) <= _MAX_CUSTOM_QUESTION
+                        and len(answer) <= _MAX_CUSTOM_ANSWER
+                    ):
+                        _custom_qa[question] = answer
+            except Exception:
+                # 用户自定义问答损坏时不影响机器人启动；下一次保存会重建文件。
+                _custom_qa.clear()
+
+        def _save_custom_qa():
+            if not _custom_qa_path:
+                raise ValueError('自定义问答存储尚未初始化。')
+            import lear_mobile
+            lear_mobile.atomic_json_dump(
+                _custom_qa_path,
+                [
+                    {'question': question, 'answer': answer}
+                    for question, answer in _custom_qa.items()
+                ]
+            )
+
+        def _custom_question_vector(calc, question):
+            if question in _custom_vectors:
+                return _custom_vectors[question]
+            vector = calc.vector_manager.get_sentence_vector(question)
+            _custom_vectors[question] = vector
+            return vector
+
+        def _match_custom_qa(text, calc):
+            if not _custom_qa or calc is None:
+                return None
+            query = text.replace('\r', '').strip()
+            if not query:
+                return None
+
+            # 与原生问答一致：完全相同的问题直接 1.0 命中。
+            exact = _custom_qa.get(query)
+            if exact is not None:
+                return (query, exact, 1.0)
+
+            if not calc._index_ready_event.is_set() or calc.inverted_index is None:
+                return None
+
+            # 自定义问答数量通常较小。超过 64 条时使用李尔原本保留的
+            # Top-K 预选，再使用和原生问答完全相同的 mixed -> avg -> jaccard
+            # 三阶段评分、当前模式阈值，以及相同的语义/字面权重。
+            candidates = [
+                (question, (question,))
+                for question in _custom_qa.keys()
+            ]
+            if len(candidates) > 64:
+                candidates = _lear_main._preselect_candidates_safe(
+                    query,
+                    candidates
+                )
+
+            input_vector = calc.vector_manager.get_sentence_vector(query)
+            candidates_with_sem = []
+            for question, group in candidates:
+                semantic = 0.0
+                target_vector = _custom_question_vector(calc, question)
+                if input_vector is not None and target_vector is not None:
+                    semantic = max(
+                        0.0,
+                        _lear_main.pure_cosine_similarity(
+                            input_vector,
+                            target_vector
+                        )
+                    )
+                candidates_with_sem.append((question, group, semantic))
+
+            threshold = calc.get_threshold()
+            score, match = _lear_main._worker_find_with_method(
+                query,
+                candidates_with_sem,
+                'mixed',
+                threshold,
+                2,
+                1,
+                calc.semantic_weight,
+                calc.lexical_weight
+            )
+            if match is not None:
+                return (match[0], _custom_qa.get(match[0]), score)
+
+            score, match = _lear_main._worker_find_with_method(
+                query,
+                candidates_with_sem,
+                'avg',
+                threshold,
+                2,
+                1
+            )
+            if match is not None:
+                return (match[0], _custom_qa.get(match[0]), score)
+
+            score, match = _lear_main._worker_find_with_method(
+                query,
+                candidates_with_sem,
+                'jaccard',
+                threshold,
+                2,
+                1
+            )
+            return None if match is None else (
+                match[0],
+                _custom_qa.get(match[0]),
+                score
+            )
+
+        def _install_custom_qa_matcher(m):
+            bot_class = m.AdvancedChineseBot
+            if getattr(bot_class, '_mobile_custom_qa_installed', False):
+                return
+
+            def match_single_sentence(
+                self,
+                sentence,
+                matched_questions=None,
+                length_preference=None
+            ):
+                try:
+                    calc = self.similarity_calculator
+                    threshold = calc.get_threshold()
+                    custom_match = _match_custom_qa(sentence, calc)
+                    builtin_key, builtin_score = calc.find_closest_match(
+                        sentence,
+                        self.corpus
+                    )
+
+                    # 用户新增问答与原生知识库使用同一阈值、同一评分体系并比较
+                    # 最终分数。分数相同时优先用户自定义内容，便于覆盖内置问答。
+                    if custom_match is not None:
+                        question, answer, custom_score = custom_match
+                        if (
+                            custom_score >= threshold
+                            and (
+                                builtin_key is None
+                                or custom_score >= builtin_score
+                            )
+                        ):
+                            custom_key = ('__custom_qa__', question)
+                            if (
+                                matched_questions is not None
+                                and custom_key in matched_questions
+                            ):
+                                return None
+                            self.last_response_pool = [answer]
+                            self.last_question = custom_key
+                            return (custom_key, answer)
+
+                    # 内置问答仍沿用原 match_single_sentence 的挑选、去重和
+                    # 模式处理逻辑，只复用上面已经算出的匹配结果，避免重复搜索。
+                    if not builtin_key or builtin_score < threshold:
+                        return None
+                    if (
+                        matched_questions is not None
+                        and builtin_key in matched_questions
+                    ):
+                        return None
+
+                    full_pool = self.corpus[builtin_key]
+                    self.last_response_pool = full_pool
+                    self.last_question = builtin_key
+                    used_for_this_key = self.used_responses.get(
+                        builtin_key,
+                        []
+                    )
+                    available_responses = [
+                        response
+                        for response in full_pool
+                        if response not in used_for_this_key
+                    ]
+                    if not available_responses:
+                        self.used_responses[builtin_key] = []
+                        available_responses = full_pool
+                    if not available_responses:
+                        return None
+
+                    response = self._pick_one_from_pool(
+                        available_responses,
+                        length_preference=length_preference
+                    )
+                    self.used_responses.setdefault(
+                        builtin_key,
+                        []
+                    ).append(response)
+                    response = self.modify_response_by_mode(response)
+                    return (builtin_key, response)
+                except Exception:
+                    traceback.print_exc()
+                    return None
+
+            bot_class.match_single_sentence = match_single_sentence
+            bot_class._mobile_custom_qa_installed = True
+
+        def list_custom_qa():
+            with _bridge_lock:
+                return _json({
+                    'items': [
+                        {'question': question, 'answer': answer}
+                        for question, answer in _custom_qa.items()
+                    ],
+                    'count': len(_custom_qa),
+                    'limit': _MAX_CUSTOM_QA
+                })
+
+        def upsert_custom_qa(question, answer):
+            try:
+                with _bridge_lock:
+                    question = _clean_custom_value(
+                        question,
+                        _MAX_CUSTOM_QUESTION,
+                        '问题'
+                    )
+                    answer = _clean_custom_value(
+                        answer,
+                        _MAX_CUSTOM_ANSWER,
+                        '回答'
+                    )
+                    existed = question in _custom_qa
+                    if not existed and len(_custom_qa) >= _MAX_CUSTOM_QA:
+                        raise ValueError(f'自定义问答最多保存{_MAX_CUSTOM_QA}条。')
+                    _custom_qa[question] = answer
+                    _custom_vectors.pop(question, None)
+                    _save_custom_qa()
+                    return _json({
+                        'ok': True,
+                        'updated': existed,
+                        'count': len(_custom_qa)
+                    })
+            except Exception as error:
+                return _json({'ok': False, 'error': str(error)})
+
+        def update_custom_qa(old_question, new_question, answer):
+            try:
+                with _bridge_lock:
+                    old_question = _clean_custom_value(
+                        old_question,
+                        _MAX_CUSTOM_QUESTION,
+                        '原问题'
+                    )
+                    new_question = _clean_custom_value(
+                        new_question,
+                        _MAX_CUSTOM_QUESTION,
+                        '问题'
+                    )
+                    answer = _clean_custom_value(
+                        answer,
+                        _MAX_CUSTOM_ANSWER,
+                        '回答'
+                    )
+                    if old_question not in _custom_qa:
+                        raise ValueError('原自定义问答已不存在，请刷新后重试。')
+                    if new_question != old_question and new_question in _custom_qa:
+                        raise ValueError('修改后的问题已存在，请换一个问题。')
+                    if new_question == old_question:
+                        _custom_qa[old_question] = answer
+                        _custom_vectors.pop(old_question, None)
+                    else:
+                        replaced = {}
+                        for question, old_answer in _custom_qa.items():
+                            if question == old_question:
+                                replaced[new_question] = answer
+                            else:
+                                replaced[question] = old_answer
+                        _custom_qa.clear()
+                        _custom_qa.update(replaced)
+                        _custom_vectors.pop(old_question, None)
+                        _custom_vectors.pop(new_question, None)
+                    _save_custom_qa()
+                    return _json({
+                        'ok': True,
+                        'question': new_question,
+                        'count': len(_custom_qa)
+                    })
+            except Exception as error:
+                return _json({'ok': False, 'error': str(error)})
+
+        def delete_custom_qa(question):
+            try:
+                with _bridge_lock:
+                    question = _clean_custom_value(
+                        question,
+                        _MAX_CUSTOM_QUESTION,
+                        '问题'
+                    )
+                    removed = _custom_qa.pop(question, None) is not None
+                    _custom_vectors.pop(question, None)
+                    if removed:
+                        _save_custom_qa()
+                    return _json({
+                        'ok': True,
+                        'removed': removed,
+                        'count': len(_custom_qa)
+                    })
+            except Exception as error:
+                return _json({'ok': False, 'error': str(error)})
 
         def _start_new_session_locked():
             global _shared_similarity_calculator
@@ -571,6 +914,8 @@ jobs:
                             owner.type_like_human(text)
                         lear_main.ReminderBot._output_and_enqueue = emit
                         lear_main.TopicInitiator._output_and_enqueue = emit
+                        _install_custom_qa_matcher(lear_main)
+                    _load_custom_qa(files_dir)
                     return _json(_start_new_session_locked())
             except Exception as error:
                 return _json({'error': str(error), 'traceback': traceback.format_exc()})
@@ -766,6 +1111,7 @@ jobs:
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:text="最近对话（15条）" android:textSize="18sp" android:textStyle="bold" android:textColor="@color/black" />
                 <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border_gray" />
                 <androidx.recyclerview.widget.RecyclerView android:id="@+id/history_recycler" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/btn_custom_qa" android:layout_width="match_parent" android:layout_height="52dp" android:text="＋ 自定义问答" android:textColor="@color/white" android:insetTop="0dp" android:insetBottom="0dp" app:backgroundTint="@color/accent_blue" app:cornerRadius="0dp" />
                 <com.google.android.material.button.MaterialButton android:id="@+id/btn_clear_all" android:layout_width="match_parent" android:layout_height="52dp" android:text="清空所有记录" android:textColor="@color/white" android:insetTop="0dp" android:insetBottom="0dp" app:backgroundTint="@color/error_red" app:cornerRadius="0dp" />
             </LinearLayout>
         </androidx.drawerlayout.widget.DrawerLayout>
@@ -961,6 +1307,10 @@ jobs:
             val successful: Boolean,
             val error: String? = null
         )
+        private data class CustomQaItem(
+            val question: String,
+            val answer: String
+        )
         class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             companion object {
                 private const val TYPE_USER = 0
@@ -1019,6 +1369,7 @@ jobs:
             private lateinit var inputMessage: EditText
             private lateinit var btnSend: MaterialButton
             private lateinit var btnClearAll: MaterialButton
+            private lateinit var btnCustomQa: MaterialButton
             private lateinit var btnNewSession: ImageButton
             private lateinit var btnFontSize: TextView
             private lateinit var btnEffect: TextView
@@ -1068,14 +1419,34 @@ jobs:
             private var pendingSmoothScroll = true
             private val scrollRunnable = Runnable {
                 val position = chatAdapter.itemCount - 1
-                if (position < 0) return@Runnable
+                if (position < 0 || !chatRecycler.isAttachedToWindow) return@Runnable
                 val manager = chatRecycler.layoutManager as? LinearLayoutManager ?: return@Runnable
                 val lastVisible = manager.findLastVisibleItemPosition()
                 val distance = position - lastVisible
-                if (pendingSmoothScroll && distance in 0..6) {
-                    chatRecycler.smoothScrollToPosition(position)
-                } else {
-                    chatRecycler.scrollToPosition(position)
+                if (distance > 0) {
+                    if (pendingSmoothScroll && distance <= 6) {
+                        chatRecycler.smoothScrollToPosition(position)
+                    } else {
+                        chatRecycler.scrollToPosition(position)
+                    }
+                    return@Runnable
+                }
+
+                // 打字机输出会持续增高最后一个气泡。scrollToPosition() 只能保证
+                // 该 item 已经“可见”，却不保证新增长出来的底边仍在屏幕内。
+                // 等本帧重新测量后按实际溢出像素跟随底部，避免文字卡在输入框下面。
+                chatRecycler.postOnAnimation {
+                    if (!chatRecycler.isAttachedToWindow) return@postOnAnimation
+                    val lastView = manager.findViewByPosition(position) ?: return@postOnAnimation
+                    val viewportBottom = chatRecycler.height - chatRecycler.paddingBottom
+                    val overflow = lastView.bottom - viewportBottom
+                    if (overflow > 0) {
+                        if (pendingSmoothScroll && overflow <= chatRecycler.height / 2) {
+                            chatRecycler.smoothScrollBy(0, overflow)
+                        } else {
+                            chatRecycler.scrollBy(0, overflow)
+                        }
+                    }
                 }
             }
             private val pickImageLauncher =
@@ -1239,6 +1610,7 @@ jobs:
                 inputMessage = findViewById(R.id.input_message)
                 btnSend = findViewById(R.id.btn_send)
                 btnClearAll = findViewById(R.id.btn_clear_all)
+                btnCustomQa = findViewById(R.id.btn_custom_qa)
                 btnNewSession = findViewById(R.id.btn_new_session)
                 btnFontSize = findViewById(R.id.btn_font)
                 btnEffect = findViewById(R.id.btn_effect)
@@ -1256,6 +1628,10 @@ jobs:
                 btnNewSession.setOnClickListener { startNewSession() }
                 btnSend.setOnClickListener { sendMessage() }
                 btnClearAll.setOnClickListener { showClearAllDialog() }
+                btnCustomQa.setOnClickListener {
+                    drawerLayout.closeDrawer(GravityCompat.START)
+                    showCustomQaManager()
+                }
                 btnImage.setOnClickListener {
                     if (isOcrProcessing) {
                         Toast.makeText(this, "正在识别上一张图片", Toast.LENGTH_SHORT).show()
@@ -1631,7 +2007,7 @@ jobs:
                             botMessage.displaySpannable = fullSpan.subSequence(0, offsets[count - 1])
                             if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
                                 chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
-                                if (now - lastScroll >= 80L && isChatNearBottom()) {
+                                if (now - lastScroll >= 32L && isChatNearBottom()) {
                                     scrollToBottom(false)
                                     lastScroll = now
                                 }
@@ -1642,8 +2018,10 @@ jobs:
                     }
                 } finally {
                     botMessage.displaySpannable = fullSpan
-                    if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId))
+                    if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
                         chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
+                        if (isChatNearBottom()) scrollToBottom(false)
+                    }
                 }
             }
             private fun processImage(uri: Uri) {
@@ -2195,6 +2573,257 @@ jobs:
                     }
                     .show()
             }
+            private fun showCustomQaManager() {
+                val module = bootstrapModule
+                if (module == null || !isBackendReady) {
+                    Toast.makeText(this, "李尔仍在加载，请稍后再试", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                lifecycleScope.launch {
+                    try {
+                        val raw = withContext(pythonDispatcher) {
+                            module.callAttr("list_custom_qa").toString()
+                        }
+                        val json = JSONObject(raw)
+                        val array = json.optJSONArray("items") ?: JSONArray()
+                        val items = ArrayList<CustomQaItem>(array.length())
+                        for (index in 0 until array.length()) {
+                            val item = array.optJSONObject(index) ?: continue
+                            val question = item.optString("question", "").trim()
+                            val answer = item.optString("answer", "").trim()
+                            if (question.isNotEmpty() && answer.isNotEmpty()) {
+                                items.add(CustomQaItem(question, answer))
+                            }
+                        }
+                        showCustomQaList(items, json.optInt("limit", 500))
+                    } catch (error: Exception) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "读取自定义问答失败：${error.message ?: "未知错误"}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+            private fun showCustomQaList(items: List<CustomQaItem>, limit: Int) {
+                val builder = AlertDialog.Builder(this)
+                    .setTitle("自定义问答（${items.size}/$limit）")
+                    .setPositiveButton("新增问答") { _, _ -> showAddCustomQaDialog() }
+                    .setNegativeButton("关闭", null)
+                if (items.isEmpty()) {
+                    builder.setMessage(
+                        "还没有自定义问答。\n\n保存后，问题会使用李尔现有的语义向量、混合相似度和当前匹配阈值参与回答。"
+                    )
+                } else {
+                    val labels = items.map { item ->
+                        if (item.question.length > 28) item.question.take(28) + "…" else item.question
+                    }.toTypedArray()
+                    builder.setItems(labels) { _, which ->
+                        showCustomQaDetail(items[which])
+                    }
+                }
+                builder.show()
+            }
+            private fun showAddCustomQaDialog() {
+                val module = bootstrapModule ?: return
+                val container = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(48, 24, 48, 8)
+                }
+                val note = TextView(this).apply {
+                    text = "一个问题对应一个回答；相同问题再次保存会更新原回答。"
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                    textSize = 13f
+                    setPadding(0, 0, 0, 14)
+                }
+                val questionInput = EditText(this).apply {
+                    hint = "问题"
+                    maxLines = 3
+                    filters = arrayOf(InputFilter.LengthFilter(200))
+                    setSingleLine(false)
+                }
+                val answerInput = EditText(this).apply {
+                    hint = "回答"
+                    minLines = 3
+                    maxLines = 8
+                    gravity = Gravity.TOP or Gravity.START
+                    filters = arrayOf(InputFilter.LengthFilter(2000))
+                    setSingleLine(false)
+                }
+                container.addView(note)
+                container.addView(questionInput)
+                container.addView(answerInput)
+                val dialog = AlertDialog.Builder(this)
+                    .setTitle("新增自定义问答")
+                    .setView(container)
+                    .setPositiveButton("保存", null)
+                    .setNegativeButton("取消", null)
+                    .create()
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val question = questionInput.text?.toString()?.trim().orEmpty()
+                        val answer = answerInput.text?.toString()?.trim().orEmpty()
+                        if (question.isEmpty() || answer.isEmpty()) {
+                            Toast.makeText(this, "问题和回答都不能为空", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                        saveButton.isEnabled = false
+                        lifecycleScope.launch {
+                            try {
+                                val raw = withContext(pythonDispatcher) {
+                                    module.callAttr("upsert_custom_qa", question, answer).toString()
+                                }
+                                val result = JSONObject(raw)
+                                if (!result.optBoolean("ok", false)) {
+                                    error(result.optString("error", "保存失败"))
+                                }
+                                val action = if (result.optBoolean("updated", false)) "已更新" else "已添加"
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "$action，共 ${result.optInt("count", 0)} 条自定义问答",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                dialog.dismiss()
+                            } catch (error: Exception) {
+                                saveButton.isEnabled = true
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    error.message ?: "保存失败",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+                dialog.show()
+            }
+            private fun showCustomQaDetail(item: CustomQaItem) {
+                AlertDialog.Builder(this)
+                    .setTitle(item.question)
+                    .setMessage(item.answer)
+                    .setPositiveButton("编辑") { _, _ -> showEditCustomQaDialog(item) }
+                    .setNeutralButton("删除") { _, _ -> confirmDeleteCustomQa(item) }
+                    .setNegativeButton("关闭", null)
+                    .show()
+            }
+            private fun showEditCustomQaDialog(item: CustomQaItem) {
+                val module = bootstrapModule ?: return
+                val container = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(48, 24, 48, 8)
+                }
+                val note = TextView(this).apply {
+                    text = "可以同时修改问题和回答。若修改问题，新问题不能与其他已保存的问题重复。"
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                    textSize = 13f
+                    setPadding(0, 0, 0, 14)
+                }
+                val questionInput = EditText(this).apply {
+                    hint = "问题"
+                    setText(item.question)
+                    setSelection(text.length)
+                    maxLines = 3
+                    filters = arrayOf(InputFilter.LengthFilter(200))
+                    setSingleLine(false)
+                }
+                val answerInput = EditText(this).apply {
+                    hint = "回答"
+                    setText(item.answer)
+                    setSelection(text.length)
+                    minLines = 3
+                    maxLines = 8
+                    gravity = Gravity.TOP or Gravity.START
+                    filters = arrayOf(InputFilter.LengthFilter(2000))
+                    setSingleLine(false)
+                }
+                container.addView(note)
+                container.addView(questionInput)
+                container.addView(answerInput)
+                val dialog = AlertDialog.Builder(this)
+                    .setTitle("编辑自定义问答")
+                    .setView(container)
+                    .setPositiveButton("保存修改", null)
+                    .setNegativeButton("取消", null)
+                    .create()
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val newQuestion = questionInput.text?.toString()?.trim().orEmpty()
+                        val newAnswer = answerInput.text?.toString()?.trim().orEmpty()
+                        if (newQuestion.isEmpty() || newAnswer.isEmpty()) {
+                            Toast.makeText(this, "问题和回答都不能为空", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        if (newQuestion == item.question && newAnswer == item.answer) {
+                            Toast.makeText(this, "内容没有变化", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                        saveButton.isEnabled = false
+                        lifecycleScope.launch {
+                            try {
+                                val raw = withContext(pythonDispatcher) {
+                                    module.callAttr(
+                                        "update_custom_qa",
+                                        item.question,
+                                        newQuestion,
+                                        newAnswer
+                                    ).toString()
+                                }
+                                val result = JSONObject(raw)
+                                if (!result.optBoolean("ok", false)) {
+                                    error(result.optString("error", "修改失败"))
+                                }
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "已保存修改",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                dialog.dismiss()
+                                showCustomQaManager()
+                            } catch (error: Exception) {
+                                saveButton.isEnabled = true
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    error.message ?: "修改失败",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+                dialog.show()
+            }
+            private fun confirmDeleteCustomQa(item: CustomQaItem) {
+                AlertDialog.Builder(this)
+                    .setTitle("删除自定义问答")
+                    .setMessage("确定删除“${item.question}”吗？")
+                    .setPositiveButton("删除") { _, _ -> deleteCustomQa(item) }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+            private fun deleteCustomQa(item: CustomQaItem) {
+                val module = bootstrapModule ?: return
+                lifecycleScope.launch {
+                    try {
+                        val raw = withContext(pythonDispatcher) {
+                            module.callAttr("delete_custom_qa", item.question).toString()
+                        }
+                        val result = JSONObject(raw)
+                        if (!result.optBoolean("ok", false)) {
+                            error(result.optString("error", "删除失败"))
+                        }
+                        Toast.makeText(this@MainActivity, "已删除", Toast.LENGTH_SHORT).show()
+                        showCustomQaManager()
+                    } catch (error: Exception) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            error.message ?: "删除失败",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
             private fun showDeleteDialog(session: ChatSession) {
                 AlertDialog.Builder(this)
                     .setTitle("提示")
@@ -2392,8 +3021,14 @@ jobs:
             }
             private fun isChatNearBottom(): Boolean {
                 val manager = chatRecycler.layoutManager as? LinearLayoutManager ?: return true
+                val lastPosition = chatAdapter.itemCount - 1
+                if (lastPosition < 0) return true
                 val lastVisible = manager.findLastVisibleItemPosition()
-                return lastVisible >= chatAdapter.itemCount - 3
+                if (lastVisible < lastPosition) return lastVisible >= lastPosition - 1
+                val lastView = manager.findViewByPosition(lastPosition) ?: return true
+                val viewportBottom = chatRecycler.height - chatRecycler.paddingBottom
+                val threshold = (48f * resources.displayMetrics.density).toInt()
+                return lastView.bottom <= viewportBottom + threshold
             }
             private fun speakMessageIfNeeded(message: ChatMessage) {
                 if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || !isTtsEnabled || message.isSystem || !::tts.isInitialized) return
@@ -2880,6 +3515,20 @@ jobs:
             answer=json.loads(b.process_message(text,sid))
             assert 'error' not in answer and answer['replies'],answer
             assert json.loads(b.poll_async(sid))==[], 'Duplicate synchronous reply'
+        custom=json.loads(b.upsert_custom_qa('这是自定义测试问题','这是自定义测试回答'))
+        assert custom['ok'] and custom['count']==1,custom
+        custom_answer=json.loads(b.process_message('这是自定义测试问题',sid))
+        assert custom_answer['replies']==['这是自定义测试回答'],custom_answer
+        custom_list=json.loads(b.list_custom_qa())
+        assert custom_list['count']==1 and custom_list['items'][0]['question']=='这是自定义测试问题'
+        edited=json.loads(b.update_custom_qa('这是自定义测试问题','这是修改后的测试问题','这是修改后的测试回答'))
+        assert edited['ok'] and edited['question']=='这是修改后的测试问题' and edited['count']==1,edited
+        edited_answer=json.loads(b.process_message('这是修改后的测试问题',sid))
+        assert edited_answer['replies']==['这是修改后的测试回答'],edited_answer
+        custom_list=json.loads(b.list_custom_qa())
+        assert custom_list['count']==1 and custom_list['items'][0]=={'question':'这是修改后的测试问题','answer':'这是修改后的测试回答'}
+        removed=json.loads(b.delete_custom_qa('这是修改后的测试问题'))
+        assert removed['ok'] and removed['removed'] and removed['count']==0,removed
         session._record_message('测试异步消息')
         assert len(json.loads(b.poll_async(sid)))==1
         assert json.loads(b.poll_async(sid))==[]
