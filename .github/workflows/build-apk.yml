@@ -694,20 +694,38 @@ jobs:
                     calc = self.similarity_calculator
                     threshold = calc.get_threshold()
                     custom_match = _match_custom_qa(sentence, calc)
+
+                    # 完全相同的问题代表用户明确覆盖：直接采用自定义回答，
+                    # 不改写也不删除原生知识库。旧聊天消息不会被追溯修改。
+                    if custom_match is not None:
+                        question, answer, custom_score = custom_match
+                        if custom_score >= 0.999999:
+                            custom_key = ('__custom_qa__', question)
+                            if (
+                                matched_questions is not None
+                                and custom_key in matched_questions
+                            ):
+                                return None
+                            self.last_response_pool = [answer]
+                            self.last_question = custom_key
+                            return (custom_key, answer)
+
                     builtin_key, builtin_score = calc.find_closest_match(
                         sentence,
                         self.corpus
                     )
 
-                    # 用户新增问答与原生知识库使用同一阈值、同一评分体系并比较
-                    # 最终分数。分数相同时优先用户自定义内容，便于覆盖内置问答。
+                    # 非精确输入继续让自定义与原生问答竞争。为避免少量自定义问题
+                    # 抢走相近但本应属于原知识库的输入，自定义分数至少高 0.02
+                    # 才覆盖；若原生没有可用命中，则自定义达到阈值即可。
                     if custom_match is not None:
                         question, answer, custom_score = custom_match
                         if (
                             custom_score >= threshold
                             and (
                                 builtin_key is None
-                                or custom_score >= builtin_score
+                                or builtin_score < threshold
+                                or custom_score >= builtin_score + 0.02
                             )
                         ):
                             custom_key = ('__custom_qa__', question)
@@ -767,10 +785,11 @@ jobs:
 
         def list_custom_qa():
             with _bridge_lock:
+                # 字典内部保持“最旧 -> 最新”；界面按“最新 -> 最旧”返回。
                 return _json({
                     'items': [
                         {'question': question, 'answer': answer}
-                        for question, answer in _custom_qa.items()
+                        for question, answer in reversed(list(_custom_qa.items()))
                     ],
                     'count': len(_custom_qa),
                     'limit': _MAX_CUSTOM_QA
@@ -792,6 +811,9 @@ jobs:
                     existed = question in _custom_qa
                     if not existed and len(_custom_qa) >= _MAX_CUSTOM_QA:
                         raise ValueError(f'自定义问答最多保存{_MAX_CUSTOM_QA}条。')
+                    # 新增或再次保存都视为“最近修改”，移动到最新位置。
+                    if existed:
+                        _custom_qa.pop(question, None)
                     _custom_qa[question] = answer
                     _custom_vectors.pop(question, None)
                     _save_custom_qa()
@@ -825,20 +847,11 @@ jobs:
                         raise ValueError('原自定义问答已不存在，请刷新后重试。')
                     if new_question != old_question and new_question in _custom_qa:
                         raise ValueError('修改后的问题已存在，请换一个问题。')
-                    if new_question == old_question:
-                        _custom_qa[old_question] = answer
-                        _custom_vectors.pop(old_question, None)
-                    else:
-                        replaced = {}
-                        for question, old_answer in _custom_qa.items():
-                            if question == old_question:
-                                replaced[new_question] = answer
-                            else:
-                                replaced[question] = old_answer
-                        _custom_qa.clear()
-                        _custom_qa.update(replaced)
-                        _custom_vectors.pop(old_question, None)
-                        _custom_vectors.pop(new_question, None)
+                    # 编辑过的项目同样移动到“最新”位置。
+                    _custom_qa.pop(old_question, None)
+                    _custom_qa[new_question] = answer
+                    _custom_vectors.pop(old_question, None)
+                    _custom_vectors.pop(new_question, None)
                     _save_custom_qa()
                     return _json({
                         'ok': True,
@@ -1178,6 +1191,7 @@ jobs:
         import android.graphics.BitmapFactory
         import android.graphics.Color
         import android.graphics.Typeface
+        import android.graphics.drawable.GradientDrawable
         import android.net.Uri
         import android.os.Build
         import android.os.Bundle
@@ -1195,14 +1209,17 @@ jobs:
         import android.view.Gravity
         import android.view.View
         import android.view.ViewGroup
+        import android.view.ViewTreeObserver
         import android.view.inputmethod.EditorInfo
         import android.view.inputmethod.InputMethodManager
         import android.widget.EditText
+        import android.widget.GridLayout
         import android.widget.ImageButton
         import android.widget.ImageView
         import android.widget.LinearLayout
         import android.widget.ProgressBar
         import android.widget.SeekBar
+        import android.widget.ScrollView
         import android.widget.TextView
         import android.widget.Toast
         import androidx.activity.result.contract.ActivityResultContracts
@@ -1417,6 +1434,31 @@ jobs:
                 }
             }
             private var pendingSmoothScroll = true
+            private var bottomPinScheduled = false
+            private fun pinLastMessageBottomBeforeDraw() {
+                if (bottomPinScheduled || !chatRecycler.isAttachedToWindow) return
+                bottomPinScheduled = true
+                val observer = chatRecycler.viewTreeObserver
+                observer.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+                    override fun onPreDraw(): Boolean {
+                        if (observer.isAlive) observer.removeOnPreDrawListener(this)
+                        bottomPinScheduled = false
+                        if (!chatRecycler.isAttachedToWindow) return true
+                        val manager = chatRecycler.layoutManager as? LinearLayoutManager ?: return true
+                        val position = chatAdapter.itemCount - 1
+                        if (position < 0) return true
+                        val lastView = manager.findViewByPosition(position) ?: return true
+                        val viewportBottom = chatRecycler.height - chatRecycler.paddingBottom
+                        val overflow = lastView.bottom - viewportBottom
+                        if (overflow > 0) {
+                            // 在这一帧真正绘制之前先抵消新增高度，不再出现
+                            // “先长到输入框下面、下一帧再被挤上来”的视觉跳动。
+                            chatRecycler.scrollBy(0, overflow)
+                        }
+                        return true
+                    }
+                })
+            }
             private val scrollRunnable = Runnable {
                 val position = chatAdapter.itemCount - 1
                 if (position < 0 || !chatRecycler.isAttachedToWindow) return@Runnable
@@ -1428,25 +1470,20 @@ jobs:
                         chatRecycler.smoothScrollToPosition(position)
                     } else {
                         chatRecycler.scrollToPosition(position)
+                        pinLastMessageBottomBeforeDraw()
                     }
                     return@Runnable
                 }
-
-                // 打字机输出会持续增高最后一个气泡。scrollToPosition() 只能保证
-                // 该 item 已经“可见”，却不保证新增长出来的底边仍在屏幕内。
-                // 等本帧重新测量后按实际溢出像素跟随底部，避免文字卡在输入框下面。
-                chatRecycler.postOnAnimation {
-                    if (!chatRecycler.isAttachedToWindow) return@postOnAnimation
-                    val lastView = manager.findViewByPosition(position) ?: return@postOnAnimation
-                    val viewportBottom = chatRecycler.height - chatRecycler.paddingBottom
-                    val overflow = lastView.bottom - viewportBottom
-                    if (overflow > 0) {
-                        if (pendingSmoothScroll && overflow <= chatRecycler.height / 2) {
-                            chatRecycler.smoothScrollBy(0, overflow)
-                        } else {
-                            chatRecycler.scrollBy(0, overflow)
-                        }
+                if (pendingSmoothScroll) {
+                    chatRecycler.postOnAnimation {
+                        if (!chatRecycler.isAttachedToWindow) return@postOnAnimation
+                        val lastView = manager.findViewByPosition(position) ?: return@postOnAnimation
+                        val viewportBottom = chatRecycler.height - chatRecycler.paddingBottom
+                        val overflow = lastView.bottom - viewportBottom
+                        if (overflow > 0) chatRecycler.smoothScrollBy(0, overflow)
                     }
+                } else {
+                    pinLastMessageBottomBeforeDraw()
                 }
             }
             private val pickImageLauncher =
@@ -1993,7 +2030,6 @@ jobs:
                 val duration = (350L + offsets.size * 9L).coerceAtMost(6500L)
                 val started = SystemClock.uptimeMillis()
                 var shown = 0
-                var lastScroll = 0L
                 try {
                     while (shown < offsets.size) {
                         if (targetSession !== currentSession || generation != sessionGeneration ||
@@ -2003,24 +2039,25 @@ jobs:
                         val count = (offsets.size * (0.25 * progress + 0.75 * progress * progress)).toInt()
                             .coerceIn(1, offsets.size)
                         if (count != shown) {
+                            // 必须在文字变高之前记录用户是否仍贴着底部。否则新一行
+                            // 先把底边推到屏幕外后再判断，会误以为用户主动上滑。
+                            val followBottom = isChatNearBottom()
                             shown = count
                             botMessage.displaySpannable = fullSpan.subSequence(0, offsets[count - 1])
                             if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
                                 chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
-                                if (now - lastScroll >= 32L && isChatNearBottom()) {
-                                    scrollToBottom(false)
-                                    lastScroll = now
-                                }
+                                if (followBottom) pinLastMessageBottomBeforeDraw()
                             }
                         }
                         if (progress >= 1.0) break
                         delay(16L)
                     }
                 } finally {
+                    val followBottom = isChatNearBottom()
                     botMessage.displaySpannable = fullSpan
                     if (chatAdapter.isSameMessage(adapterPosition, botMessage.localId)) {
                         chatAdapter.notifyItemChanged(adapterPosition, PAYLOAD_TYPING)
-                        if (isChatNearBottom()) scrollToBottom(false)
+                        if (followBottom) pinLastMessageBottomBeforeDraw()
                     }
                 }
             }
@@ -2606,23 +2643,96 @@ jobs:
                 }
             }
             private fun showCustomQaList(items: List<CustomQaItem>, limit: Int) {
-                val builder = AlertDialog.Builder(this)
+                fun dp(value: Int): Int =
+                    (value * resources.displayMetrics.density).toInt()
+
+                var managerDialog: AlertDialog? = null
+                val content = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(4), dp(12), dp(4))
+                }
+                if (items.isEmpty()) {
+                    content.addView(TextView(this).apply {
+                        text =
+                            "还没有自定义问答。\n\n完全相同的问题会优先使用自定义回答；相似问题则会与李尔原有问答比较匹配度。"
+                        textSize = 14f
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                        setPadding(dp(4), dp(10), dp(4), dp(10))
+                    })
+                } else {
+                    val grid = GridLayout(this).apply {
+                        columnCount = 3
+                        alignmentMode = GridLayout.ALIGN_BOUNDS
+                        useDefaultMargins = false
+                    }
+                    items.forEach { item ->
+                        val label = if (item.question.length > 5) {
+                            item.question.take(5) + "…"
+                        } else {
+                            item.question
+                        }
+                        val chip = TextView(this).apply {
+                            text = label
+                            gravity = Gravity.CENTER
+                            textSize = 14f
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                            setPadding(dp(8), 0, dp(8), 0)
+                            background = GradientDrawable().apply {
+                                shape = GradientDrawable.RECTANGLE
+                                setColor(Color.parseColor("#FAFFFB"))
+                                setStroke(dp(1).coerceAtLeast(1), Color.parseColor("#B9DFC3"))
+                                cornerRadius = dp(10).toFloat()
+                            }
+                            isClickable = true
+                            isFocusable = true
+                            contentDescription = "编辑自定义问答：${item.question}"
+                            setOnClickListener {
+                                managerDialog?.dismiss()
+                                showEditCustomQaDialog(item)
+                            }
+                        }
+                        grid.addView(chip, GridLayout.LayoutParams().apply {
+                            width = 0
+                            height = dp(44)
+                            columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                            setMargins(dp(4), dp(4), dp(4), dp(4))
+                        })
+                    }
+                    val scroll = ScrollView(this).apply {
+                        isFillViewport = false
+                        isVerticalScrollBarEnabled = items.size > 15
+                        addView(
+                            grid,
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            )
+                        )
+                    }
+                    content.addView(
+                        scroll,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            if (items.size > 15) dp(260) else ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
+                    )
+                    content.addView(TextView(this).apply {
+                        text = "最新添加或修改的问答排在最前面；点击即可直接编辑。"
+                        textSize = 12f
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
+                        setPadding(dp(5), dp(8), dp(5), 0)
+                    })
+                }
+
+                managerDialog = AlertDialog.Builder(this)
                     .setTitle("自定义问答（${items.size}/$limit）")
+                    .setView(content)
                     .setPositiveButton("新增问答") { _, _ -> showAddCustomQaDialog() }
                     .setNegativeButton("关闭", null)
-                if (items.isEmpty()) {
-                    builder.setMessage(
-                        "还没有自定义问答。\n\n保存后，问题会使用李尔现有的语义向量、混合相似度和当前匹配阈值参与回答。"
-                    )
-                } else {
-                    val labels = items.map { item ->
-                        if (item.question.length > 28) item.question.take(28) + "…" else item.question
-                    }.toTypedArray()
-                    builder.setItems(labels) { _, which ->
-                        showCustomQaDetail(items[which])
-                    }
-                }
-                builder.show()
+                    .create()
+                managerDialog.show()
             }
             private fun showAddCustomQaDialog() {
                 val module = bootstrapModule ?: return
@@ -2644,7 +2754,7 @@ jobs:
                 }
                 val answerInput = EditText(this).apply {
                     hint = "回答"
-                    minLines = 3
+                    minLines = 1
                     maxLines = 8
                     gravity = Gravity.TOP or Gravity.START
                     filters = arrayOf(InputFilter.LengthFilter(2000))
@@ -2685,6 +2795,7 @@ jobs:
                                     Toast.LENGTH_SHORT
                                 ).show()
                                 dialog.dismiss()
+                                showCustomQaManager()
                             } catch (error: Exception) {
                                 saveButton.isEnabled = true
                                 Toast.makeText(
@@ -2731,7 +2842,7 @@ jobs:
                     hint = "回答"
                     setText(item.answer)
                     setSelection(text.length)
-                    minLines = 3
+                    minLines = 1
                     maxLines = 8
                     gravity = Gravity.TOP or Gravity.START
                     filters = arrayOf(InputFilter.LengthFilter(2000))
@@ -2744,6 +2855,7 @@ jobs:
                     .setTitle("编辑自定义问答")
                     .setView(container)
                     .setPositiveButton("保存修改", null)
+                    .setNeutralButton("删除") { _, _ -> confirmDeleteCustomQa(item) }
                     .setNegativeButton("取消", null)
                     .create()
                 dialog.setOnShowListener {
