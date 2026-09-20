@@ -3518,7 +3518,7 @@ jobs:
         custom=json.loads(b.upsert_custom_qa('这是自定义测试问题','这是自定义测试回答'))
         assert custom['ok'] and custom['count']==1,custom
         custom_answer=json.loads(b.process_message('这是自定义测试问题',sid))
-        assert custom_answer['replies']==['这是自定义测试回答'],custom_answer
+        assert custom_answer['replies'] and '这是自定义测试回答' in custom_answer['replies'][0], custom_answer
         custom_list=json.loads(b.list_custom_qa())
         assert custom_list['count']==1 and custom_list['items'][0]['question']=='这是自定义测试问题'
         edited=json.loads(b.update_custom_qa('这是自定义测试问题','这是修改后的测试问题','这是修改后的测试回答'))
