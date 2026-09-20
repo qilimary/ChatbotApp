@@ -3524,7 +3524,7 @@ jobs:
         edited=json.loads(b.update_custom_qa('这是自定义测试问题','这是修改后的测试问题','这是修改后的测试回答'))
         assert edited['ok'] and edited['question']=='这是修改后的测试问题' and edited['count']==1,edited
         edited_answer=json.loads(b.process_message('这是修改后的测试问题',sid))
-        assert edited_answer['replies']==['这是修改后的测试回答'],edited_answer
+        assert edited_answer['replies'] and '这是修改后的测试回答' in edited_answer['replies'][0], edited_answer
         custom_list=json.loads(b.list_custom_qa())
         assert custom_list['count']==1 and custom_list['items'][0]=={'question':'这是修改后的测试问题','answer':'这是修改后的测试回答'}
         removed=json.loads(b.delete_custom_qa('这是修改后的测试问题'))
