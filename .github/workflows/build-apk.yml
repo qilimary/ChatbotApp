@@ -2654,7 +2654,7 @@ jobs:
                 if (items.isEmpty()) {
                     content.addView(TextView(this).apply {
                         text =
-                            "还没有自定义问答。\n\n完全相同的问题会优先使用自定义回答；相似问题则会与李尔原有问答比较匹配度。"
+                            "自定义问答，输入和回复由你新增。"
                         textSize = 14f
                         setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
                         setPadding(dp(4), dp(10), dp(4), dp(10))
@@ -2719,7 +2719,7 @@ jobs:
                         )
                     )
                     content.addView(TextView(this).apply {
-                        text = "最新添加或修改的问答排在最前面；点击即可直接编辑。"
+                        text = ""
                         textSize = 12f
                         setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
                         setPadding(dp(5), dp(8), dp(5), 0)
@@ -2741,7 +2741,7 @@ jobs:
                     setPadding(48, 24, 48, 8)
                 }
                 val note = TextView(this).apply {
-                    text = "一个问题对应一个回答；相同问题再次保存会更新原回答。"
+                    text = ""
                     setTextColor(ContextCompat.getColor(this@MainActivity, R.color.gray_text))
                     textSize = 13f
                     setPadding(0, 0, 0, 14)
